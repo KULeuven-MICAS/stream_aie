@@ -183,8 +183,6 @@ class SteadyStateIterationSpace:
         spatial_shape = (spatial_shape,) if spatial_shape > 1 else ()
         temporal_shape = self.nb_local_tensors_mem()
         temporal_shape = (temporal_shape,) if temporal_shape > 1 else ()
-        # reuse_shape = self.reuse_factor_mem()
-        # reuse_shape = (reuse_shape,) if reuse_shape > 1 else ()
         return temporal_shape + spatial_shape
 
     def reuse_factor_compute(self) -> int:
