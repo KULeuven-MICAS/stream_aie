@@ -1,71 +1,83 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
     <url>
-         <loc>https://kuleuven-micas.github.io/stream/</loc>
-         <lastmod>2025-08-22</lastmod>
+         <loc>https://kuleuven-micas.github.io/stream_aie/</loc>
+         <lastmod>2025-08-26</lastmod>
     </url>
     <url>
-         <loc>https://kuleuven-micas.github.io/stream/contribute/</loc>
-         <lastmod>2025-08-22</lastmod>
+         <loc>https://kuleuven-micas.github.io/stream_aie/contribute/</loc>
+         <lastmod>2025-08-26</lastmod>
     </url>
     <url>
-         <loc>https://kuleuven-micas.github.io/stream/future/</loc>
-         <lastmod>2025-08-22</lastmod>
+         <loc>https://kuleuven-micas.github.io/stream_aie/future/</loc>
+         <lastmod>2025-08-26</lastmod>
     </url>
     <url>
-         <loc>https://kuleuven-micas.github.io/stream/getting-started/</loc>
-         <lastmod>2025-08-22</lastmod>
+         <loc>https://kuleuven-micas.github.io/stream_aie/getting-started/</loc>
+         <lastmod>2025-08-26</lastmod>
     </url>
     <url>
-         <loc>https://kuleuven-micas.github.io/stream/hardware/</loc>
-         <lastmod>2025-08-22</lastmod>
+         <loc>https://kuleuven-micas.github.io/stream_aie/hardware/</loc>
+         <lastmod>2025-08-26</lastmod>
     </url>
     <url>
-         <loc>https://kuleuven-micas.github.io/stream/installation/</loc>
-         <lastmod>2025-08-22</lastmod>
+         <loc>https://kuleuven-micas.github.io/stream_aie/installation/</loc>
+         <lastmod>2025-08-26</lastmod>
     </url>
     <url>
-         <loc>https://kuleuven-micas.github.io/stream/mapping/</loc>
-         <lastmod>2025-08-22</lastmod>
+         <loc>https://kuleuven-micas.github.io/stream_aie/mapping/</loc>
+         <lastmod>2025-08-26</lastmod>
     </url>
     <url>
-         <loc>https://kuleuven-micas.github.io/stream/outputs/</loc>
-         <lastmod>2025-08-22</lastmod>
+         <loc>https://kuleuven-micas.github.io/stream_aie/outputs/</loc>
+         <lastmod>2025-08-26</lastmod>
     </url>
     <url>
-         <loc>https://kuleuven-micas.github.io/stream/publications/</loc>
-         <lastmod>2025-08-22</lastmod>
+         <loc>https://kuleuven-micas.github.io/stream_aie/publications/</loc>
+         <lastmod>2025-08-26</lastmod>
     </url>
     <url>
-         <loc>https://kuleuven-micas.github.io/stream/stages/</loc>
-         <lastmod>2025-08-22</lastmod>
+         <loc>https://kuleuven-micas.github.io/stream_aie/stages/</loc>
+         <lastmod>2025-08-26</lastmod>
     </url>
     <url>
-         <loc>https://kuleuven-micas.github.io/stream/user-guide/</loc>
-         <lastmod>2025-08-22</lastmod>
+         <loc>https://kuleuven-micas.github.io/stream_aie/user-guide/</loc>
+         <lastmod>2025-08-26</lastmod>
     </url>
     <url>
-         <loc>https://kuleuven-micas.github.io/stream/workload/</loc>
-         <lastmod>2025-08-22</lastmod>
+         <loc>https://kuleuven-micas.github.io/stream_aie/workload/</loc>
+         <lastmod>2025-08-26</lastmod>
     </url>
     <url>
-         <loc>https://kuleuven-micas.github.io/stream/ci/</loc>
-         <lastmod>2025-08-22</lastmod>
+         <loc>https://kuleuven-micas.github.io/stream_aie/ci/</loc>
+         <lastmod>2025-08-26</lastmod>
     </url>
     <url>
-         <loc>https://kuleuven-micas.github.io/stream/ci/latest/</loc>
-         <lastmod>2025-08-22</lastmod>
+         <loc>https://kuleuven-micas.github.io/stream_aie/ci/latest/</loc>
+         <lastmod>2025-08-26</lastmod>
     </url>
     <url>
-         <loc>https://kuleuven-micas.github.io/stream/ci/runs/921a0bd/</loc>
-         <lastmod>2025-08-22</lastmod>
+         <loc>https://kuleuven-micas.github.io/stream_aie/ci/runs/6fa311f/</loc>
+         <lastmod>2025-08-26</lastmod>
     </url>
     <url>
-         <loc>https://kuleuven-micas.github.io/stream/ci/runs/9d53d7e/</loc>
-         <lastmod>2025-08-22</lastmod>
+         <loc>https://kuleuven-micas.github.io/stream_aie/ci/runs/921a0bd/</loc>
+         <lastmod>2025-08-26</lastmod>
     </url>
     <url>
-         <loc>https://kuleuven-micas.github.io/stream/ci/runs/feec8bf/</loc>
-         <lastmod>2025-08-22</lastmod>
+         <loc>https://kuleuven-micas.github.io/stream_aie/ci/runs/9d53d7e/</loc>
+         <lastmod>2025-08-26</lastmod>
+    </url>
+    <url>
+         <loc>https://kuleuven-micas.github.io/stream_aie/ci/runs/a958b1b/</loc>
+         <lastmod>2025-08-26</lastmod>
+    </url>
+    <url>
+         <loc>https://kuleuven-micas.github.io/stream_aie/ci/runs/df0a03d/</loc>
+         <lastmod>2025-08-26</lastmod>
+    </url>
+    <url>
+         <loc>https://kuleuven-micas.github.io/stream_aie/ci/runs/feec8bf/</loc>
+         <lastmod>2025-08-26</lastmod>
     </url>
 </urlset>
