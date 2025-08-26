@@ -208,12 +208,8 @@ class SteadyStateIterationSpace:
         temporal_shape = self.nb_local_tensors_mem()
         temporal_shape = (temporal_shape,) if temporal_shape > 1 else ()
         if len(spatial_shape) > 0 and len(temporal_shape) > 0:
-            warnings.warn(
-                "Both spatial and temporal shapes have more than one dimension. "
-                "This mixes temporal reuse / distribute, which seems to be unsupported. "
-                "Skipping the temporal shape for now, will break if reuse factor > 1.",
-                stacklevel=1,
-            )
+            if self.reuse_factor_mem() > 1:
+                raise NotImplementedError("Reuse + Distribute is not implemented yet because we don't know how")
             return spatial_shape
         return temporal_shape + spatial_shape
 
