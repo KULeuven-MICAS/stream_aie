@@ -40,8 +40,9 @@ def iteration_space_to_for(block: Block, rewriter: Rewriter):  # noqa: PLR0912, 
     for i, iter_var in enumerate(ssis):
         # if not any of the following ops are relevant
         while op is not None and not any(iv.relevant for iv in ssis_op[i:]):
-            op.detach()
-            rewriter.insert_op(op, insertion_point)
+            if insertion_point.insert_before is not op:
+                op.detach()
+                rewriter.insert_op(op, insertion_point)
             insertion_point = InsertPoint.after(op)
             op = next(ops_iter, None)
             if op is not None:

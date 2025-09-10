@@ -8,6 +8,7 @@ from stream.hardware.architecture.core import Core
 from stream.utils import CostModelEvaluationLUT
 from stream.workload.computation.computation_node import ComputationNode
 from stream.workload.steady_state.computation import SteadyStateComputation
+from stream.workload.steady_state.iteration_space import SteadyStateIterationSpace
 
 if TYPE_CHECKING:
     from stream.opt.allocation.constraint_optimization.timeslot_allocation import TimeSlotAllocation
@@ -235,6 +236,14 @@ def get_partitioned_nodes(
         possible_resource_allocation = [
             core,
         ]
+        loop_relevancy_info = node.loop_relevancy_info
+        intra_core_tiling = node.intra_core_tiling
+        ssis = SteadyStateIterationSpace.from_loop_info(
+            loop_relevancy=loop_relevancy_info,
+            intra_core_tiling=intra_core_tiling,
+            operand=None,
+            inter_core_tiling=None,
+        )
         new_node = SteadyStateComputation(
             id=node.id,
             sub_id=node.sub_id,
@@ -247,6 +256,7 @@ def get_partitioned_nodes(
             input_names=node.input_names,
             partially_constant_operands=node.partially_constant_operands,
             possible_resource_allocation=possible_resource_allocation,
+            steady_state_iteration_space=ssis,
         )
         new_node.set_runtime(runtime)
         new_node.update_loop_ranges(node.loop_ranges)

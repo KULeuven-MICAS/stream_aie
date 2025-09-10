@@ -24,6 +24,7 @@ class SteadyStateComputation(ComputationNode, SteadyStateNode):
         group_id: int = 0,
         sub_id: int = -1,
         partially_constant_operands: list[LayerOperand] | None = None,
+        steady_state_iteration_space: SteadyStateIterationSpace | None = None,
     ):
         if partially_constant_operands is None:
             partially_constant_operands = []
@@ -44,8 +45,8 @@ class SteadyStateComputation(ComputationNode, SteadyStateNode):
             partially_constant_operands=partially_constant_operands,
         )
 
-        # For now, assume the steady state iteration space is not important for the computation nodes
-        steady_state_iteration_space = SteadyStateIterationSpace([])
+        if steady_state_iteration_space is None:
+            steady_state_iteration_space = SteadyStateIterationSpace([])
 
         # Initialize SteadyStateNode (explicitly, since ComputationNode also inherits from Node)
         SteadyStateNode.__init__(

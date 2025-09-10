@@ -24,7 +24,7 @@ def _sizes_from_dtypes(in_dtype: str, out_dtype: str):
     return ACT_SIZE, WEIGHT_SIZE, OUTPUT_SIZE
 
 
-def make_two_conv_workload(
+def make_two_conv_workload(  # noqa: PLR0913
     input_size: int = 224,
     in_channels: int = 16,
     mid_channels: int = 32,
@@ -33,6 +33,7 @@ def make_two_conv_workload(
     stride: int = 1,
     in_dtype: str = "fp16",
     out_dtype: str = "fp16",
+    pad: str = "same",
 ):  # noqa: N803
     """
     Create an ONNX model with two back-to-back Conv layers:
@@ -54,8 +55,11 @@ def make_two_conv_workload(
 
     # Shapes
     N, H, W = 1, input_size, input_size
-    pads_2d = kernel_size // 2  # SAME padding for stride=1 with odd kernel
-    pads = [pads_2d, pads_2d, pads_2d, pads_2d]  # [top, left, bottom, right]
+    if pad == "same":
+        pads_2d = kernel_size // 2  # SAME padding for stride=1 with odd kernel
+        pads = [pads_2d, pads_2d, pads_2d, pads_2d]  # [top, left, bottom, right]
+    else:
+        pads = [0, 0, 0, 0]
 
     # IO tensors
     input_tensor = helper.make_tensor_value_info("X", TensorProto.FLOAT, [N, in_channels, H, W])

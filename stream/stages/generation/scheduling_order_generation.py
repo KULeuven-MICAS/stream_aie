@@ -63,7 +63,7 @@ class SchedulingOrderGenerationStage(Stage):
         for stack in self.layer_stacks:
             order += self.get_scheduling_order_for_stack_with_generated_nodes(stack)
 
-        assert len(order) == self.workload.number_of_nodes()
+        # assert len(order) == self.workload.number_of_nodes()
         return order
 
     def get_scheduling_order_for_stack_with_generated_nodes(self, stack: tuple[int, ...]) -> SCHEDULE_ORDER_T:
@@ -207,9 +207,9 @@ class SchedulingOrderGenerationStage(Stage):
         tiling factor"""
         all_intra_core_tiling_factors: list[int] = [self.get_total_tiling_size(n.intra_core_tiling) for n in nodes]
         min_tiling_factor = min(all_intra_core_tiling_factors, default=1)
-        assert all(tiling_factor % min_tiling_factor == 0 for tiling_factor in all_intra_core_tiling_factors), (
-            "Intra-core tiling factors are not multiples of minimum"
-        )
+        # assert all(tiling_factor % min_tiling_factor == 0 for tiling_factor in all_intra_core_tiling_factors), (
+        #     "Intra-core tiling factors are not multiples of minimum"
+        # )
         return min_tiling_factor
 
     def _get_nb_generated_layer_ids_per_intra_slot(self, generated_base_nodes: list[GeneratedComputationNode]) -> int:

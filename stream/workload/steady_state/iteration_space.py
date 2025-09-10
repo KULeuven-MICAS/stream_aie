@@ -131,7 +131,7 @@ class SteadyStateIterationSpace:
         *,
         loop_relevancy: LoopRelevancyInfo,
         intra_core_tiling: Iterable[tuple[LayerDim, int]],
-        operand: LayerOperand,
+        operand: LayerOperand | None = None,
         inter_core_tiling: TILING_T | None = None,
     ) -> SteadyStateIterationSpace:
         """
@@ -155,25 +155,35 @@ class SteadyStateIterationSpace:
         if inter_core_tiling is None:
             inter_core_tiling = []
         # collect all R  +  PR descendants
-        relevant_dims = set(loop_relevancy.get_r_or_pr_layer_dims(operand))
-        # add PR loops
-        for dim in list(relevant_dims):
-            relevant_dims.update(loop_relevancy.pr_dims[operand].get(dim, []))
+        if operand is None:
+            relevant_dims = set()  # handled below by 'operand is None'
+        else:
+            relevant_dims = set(loop_relevancy.get_r_or_pr_layer_dims(operand))
+            related_pr_dims = set(
+                dim
+                for pr_dim, orig_dims in loop_relevancy.orig_pr_loop.items()
+                if pr_dim in relevant_dims
+                for dim in orig_dims
+            )
+            relevant_dims.update(related_pr_dims)
+            # add PR loops
+            for dim in list(relevant_dims):
+                relevant_dims.update(loop_relevancy.pr_dims[operand].get(dim, []))
 
         # Spatial inter_core_tiling loop variables
         variables: list[IterationVariable] = []
         for dim, size in inter_core_tiling:
-            is_rel = dim in relevant_dims
+            is_rel = dim in relevant_dims or operand is None  # To make all relevant for computation nodes
             variables.append(IterationVariable(dim, size, is_rel, spatial=True))
 
         # Temporal intra_core_tiling loop variables
         seen_ir = False
         for dim, size in intra_core_tiling:
-            is_rel = dim in relevant_dims
+            is_rel = dim in relevant_dims or operand is None  # To make all relevant for computation nodes
             iter_var = IterationVariable(dim, size, is_rel)
             if not is_rel:
                 seen_ir = True
-            elif seen_ir and is_rel:
+            elif seen_ir and is_rel and operand is not None:
                 # once we have seen an IR loop, subsequent R loops can't have mem reuse
                 iter_var.mem_tile_reuse = MemTileReuse.NO_REUSE
             variables.append(iter_var)

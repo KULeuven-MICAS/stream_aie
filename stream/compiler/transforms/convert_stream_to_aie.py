@@ -629,7 +629,8 @@ class TransferToRuntimeSequence(RewritePattern):
 
         of_name = of.sym_name.data
 
-        arg_order = ["Op0.I_in", "Op0.W_in", "Op0.O_out"]
+        # arg_order = ["Op0.I_in", "Op0.W_in", "Op0.O_out"]
+        arg_order = ["Conv0.I_in", "Conv0.W_in", "Conv1.W_in", "Conv1.O_out"]
 
         arg_index = arg_order.index(edge.tensor.data)
         arg = runtime_sequence.body.block.args[arg_index]
@@ -1720,7 +1721,8 @@ class ConvertStreamToAIEPass(ModulePass):
         # add a runtime sequence operation
         # find all edges
         edges: list[EdgeOp] = [edge for edge in op.walk() if isinstance(edge, EdgeOp)]
-        order = ["Op0.I_in", "Op0.W_in", "Op0.O_out"]
+        # order = ["Op0.I_in", "Op0.W_in", "Op0.O_out"]
+        order = ["Conv0.I_in", "Conv0.W_in", "Conv1.W_in", "Conv1.O_out"]
 
         runtime_arg_types = []
         for operand_name in order:

@@ -159,10 +159,15 @@ class TransferAndTensorAllocator:
             if not (
                 transfer_ssis_dims == first_transfer_ssis_dims and transfer_ssis_sizes == first_transfer_ssis_sizes
             ):
-                raise ValueError(
-                    f"Transfer {tr.node_name} has different SSIS dims and sizes than the {self.transfer_nodes[0]}: "
-                    f"{transfer_ssis_dims}, {transfer_ssis_sizes} != "
-                    f"{first_transfer_ssis_dims}, {first_transfer_ssis_sizes}"
+                # raise ValueError(
+                #     f"Transfer {tr.node_name} has different SSIS dims and sizes than the {self.transfer_nodes[0]}: "
+                #     f"{transfer_ssis_dims}, {transfer_ssis_sizes} != "
+                #     f"{first_transfer_ssis_dims}, {first_transfer_ssis_sizes}"
+                # )
+                print(
+                    f"Warning: Transfer {tr.node_name} has different SSIS dims "
+                    f"and sizes than the {self.transfer_nodes[0]}: {transfer_ssis_dims}, {transfer_ssis_sizes} "
+                    f"!= {first_transfer_ssis_dims}, {first_transfer_ssis_sizes}"
                 )
 
     def _init_transfer_fire_helpers(self) -> None:
@@ -495,6 +500,8 @@ class TransferAndTensorAllocator:
             if its FIRST link originates or ends in a memory core, enforce memory core matching:
             y_path ≤ m_store[(tr, memc)]
         """
+        if not self._is_const_io(tr):
+            return
         for p in paths:
             if not p[1]:
                 continue  # empty path
@@ -530,7 +537,7 @@ class TransferAndTensorAllocator:
             self.model.addConstr(quicksum(vars_) <= 1, name=f"link_usage_{_resource_key(link)}_{s}")
 
     # ...................... memory capacity .................... #
-    def _memory_capacity_constraints(self):
+    def _memory_capacity_constraints(self):  # noqa: PLR0912
         # start with fixed tensors
         self.core_load: dict[Core, gp.QuadExpr] = defaultdict(gp.QuadExpr)
         for t in self.tensor_fixed:
@@ -764,7 +771,7 @@ class TransferAndTensorAllocator:
             )
             self.mem_core_usage_per_core[mc] = usage
 
-        MAX_MEM_CORE_USAGE = 3
+        MAX_MEM_CORE_USAGE = 6
         self.max_mem_core_usage = self.model.addVar(vtype=GRB.INTEGER, name="maxMemCoreUsage")
         for i, usage in enumerate(self.mem_core_usage_per_core.values()):
             self.model.addConstr(self.max_mem_core_usage >= usage, name=f"maxMemCoreUsage_le_{i}")

@@ -25,14 +25,7 @@ def run_main_aie_codegen_two_conv(  # noqa: PLR0913
     ############################################INPUTS############################################
     # CREATE THE CONV ONNX MODEL
     workload_path = make_two_conv_workload(
-        input_size,
-        in_channels,
-        mid_channels,
-        out_channels,
-        kernel_size,
-        stride,
-        in_dtype,
-        out_dtype,
+        input_size, in_channels, mid_channels, out_channels, kernel_size, stride, in_dtype, out_dtype, pad="none"
     )
     accelerator = "stream/inputs/aie/hardware/whole_array.yaml"
     mapping_path = make_two_conv_mapping(
