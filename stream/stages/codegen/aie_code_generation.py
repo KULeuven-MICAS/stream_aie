@@ -8,6 +8,7 @@ from xdsl.dialects.builtin import MemRefType, ModuleOp
 from xdsl.ir import Operation, SSAValue
 from xdsl.irdl import Operand
 from xdsl.printer import Printer
+from zigzag.datatypes import LayerDim
 from zigzag.utils import DiGraphWrapper
 
 from stream.compiler.dialects.stream import ComputationNodeOp, EdgeOp, Stream, TransferOp
@@ -18,6 +19,7 @@ from stream.compiler.transforms.stream_split_transfers import StreamSplitTransfe
 from stream.cost_model.steady_state_scheduler import SteadyStateScheduler
 from stream.stages.stage import Stage, StageCallable
 from stream.workload.steady_state.computation import SteadyStateComputation
+from stream.workload.steady_state.iteration_space import ComputeTileReuse
 from stream.workload.steady_state.node import SteadyStateNode
 from stream.workload.steady_state.tensor import SteadyStateTensor
 from stream.workload.steady_state.transfer import SteadyStateTransfer
@@ -78,7 +80,7 @@ class AIECodeGenerationStage(Stage):
             edge_op = EdgeOp(None, edge.node_name, transfer_results)
         return edge_op
 
-    def create_transfer_op(  # noqa: PLR0912
+    def create_transfer_op(  # noqa: PLR0912 PLR0915
         self,
         workload: DiGraphWrapper[SteadyStateNode],
         transfer: SteadyStateTransfer,
@@ -120,8 +122,37 @@ class AIECodeGenerationStage(Stage):
         else:
             tensor = sorted(transfer.srcs, key=lambda x: x.loop_ranges)[0]
 
-        offsets = [x[0] for x in tensor.loop_ranges]
-        sizes = [x[1] - x[0] for x in tensor.loop_ranges]
+        offsets = []
+        sizes = []
+        # FIXME: make ox always relevant if ix is in there
+        for var in transfer.steady_state_iteration_space.variables:
+            if var.dimension == LayerDim("OY") and LayerDim("OY") in tensor.loop_dimensions:
+                # force oy to be relevant
+                var.relevant = True
+                # do not reuse
+                var.compute_tile_reuse = ComputeTileReuse.NOT_SET
+        # FIXME: hack for ox/ix relevance, only take the last char (bad!)
+        ssis_per_dim = {str(var.dimension)[-1]: var for var in transfer.steady_state_iteration_space.variables}
+        for dim in tensor.loop_dimensions:
+            loop_range = tensor.loop_ranges_per_dim[dim]
+
+            # offsets
+            # TODO: find better mechanism to handle both scenarios
+            dim_char = str(dim)[-1]
+            if dim_char in ssis_per_dim and ssis_per_dim[dim_char].spatial:
+                # for spatial loops, the offsets are determined by the loop ranges
+                offsets.append(loop_range[0])
+            else:
+                # otherwise, the offset is zero
+                offsets.append(0)
+
+            # sizes
+            # FIXME: hack to handle two conv example
+            if dim_char in ssis_per_dim and not ssis_per_dim[dim_char].spatial and ssis_per_dim[dim_char].relevant:
+                sizes.append(1)
+            else:
+                sizes.append(loop_range[1] - loop_range[0])
+
         strides = []
         for loop_dim in tensor.loop_dimensions:
             stride = prod(
@@ -249,10 +280,9 @@ class AIECodeGenerationStage(Stage):
         assert workload is not None
 
         module = self.generate_steady_state_workload(workload)
-
         print(module)
+        breakpoint()
 
-        # SetNoReusePass().apply(self.context, module)
         # Split transfers in push and pull
         StreamSplitTransfersPass().apply(self.context, module)
 

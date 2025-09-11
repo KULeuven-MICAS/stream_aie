@@ -260,6 +260,34 @@ class ObjectFifoHop:
             return cls.mem_to_compute(consumers, memtile, tile_op_manager, name_base)
 
     @classmethod
+    def compute_to_compute(
+        cls, producer: PushOp, consumer: PullOp, tile_op_manager: TileOpManager, name_base: str
+    ) -> Self:
+        memref_type = consumer.results[0].type
+        assert isinstance(memref_type, MemRefType)
+
+        # total elements to hold:
+        # total buffer size // stride size
+        total_elems = prod(
+            int(shape // size) for shape, size in zip(memref_type.get_shape(), consumer.sizes.get_values(), strict=True)
+        )
+
+        object_fifo = ObjectFifoOp.from_referenced_type(
+            elemNumber=(total_elems + cls.DB_EXTRA, total_elems + cls.DB_EXTRA),
+            producerTile=tile_op_manager.get_tile(producer),
+            consumerTiles=[tile_op_manager.get_tile(consumer)],
+            referenced_type=memref_type.get_element_type(),
+            shape=cast(tuple[int, ...], producer.sizes.get_values()),
+            name=name_base + "mem",
+            repeat_count=1,
+        )
+        del object_fifo.properties["repeat_count"]
+
+        if object_fifo.repeat_count is not None and object_fifo.repeat_count.value.data == 1:
+            del object_fifo.properties["repeat_count"]
+        return cls([object_fifo])
+
+    @classmethod
     def compute_to_mem(
         cls, producers: Sequence[PushOp], memtile: TileOp, tile_op_manager: TileOpManager, name_base: str
     ) -> Self:
@@ -305,6 +333,14 @@ class ObjectFifoHop:
             of_type = "unicast"
         consumers = sorted(consumers, key=lambda op: SortPullPushOp(op, tile_op_manager))
         consumer_tiles = [tile_op_manager.get_tile(consumer) for consumer in consumers]
+
+        # number of elements: max (total buffers used, total buffers reused)
+        total_elems = prod(
+            int(shape // size)
+            for shape, size in zip(memref_type.get_shape(), consumers[0].sizes.get_values(), strict=True)
+        )
+        nb_elements = max(consumers[0].ssis.data.nb_local_tensors_compute(), total_elems)
+
         if distribute:
             fifos = [(memtile, [tile]) for tile in consumer_tiles]
         else:
@@ -316,8 +352,7 @@ class ObjectFifoHop:
             else:
                 of_name = name_base + "_" + of_type
             object_fifo = ObjectFifoOp.from_referenced_type(
-                elemNumber=(consumers[0].ssis.data.nb_local_tensors_compute() + cls.DB_EXTRA,)
-                * (1 + len(of_consumers)),
+                elemNumber=(nb_elements + cls.DB_EXTRA,) * (1 + len(of_consumers)),
                 producerTile=of_producer,
                 consumerTiles=of_consumers,
                 referenced_type=memref_type.get_element_type(),
@@ -413,7 +448,9 @@ class ObjectFifoChain:
                 ObjectFifoHop.from_memtile(consumers, memtile, tile_op_manager, name_base),
             ]
         else:
-            raise NotImplementedError()
+            # assume both are core tiles, no broadcasting here for now
+            assert len(consumers) == 1 and len(producers) == 1
+            hops = [ObjectFifoHop.compute_to_compute(producers[0], consumers[0], tile_op_manager, name_base)]
 
         # generate links for every hop
         links: Sequence[ObjectFifoLinkOp] = []
@@ -773,8 +810,11 @@ class TransferToObjectFIFOPattern(RewritePattern):
 
         assert isinstance(memref_type := operand.type, MemRefType)
 
-        first_relevant_iter = next(iv for iv in op.ssis.data.get_temporal_variables() if iv.relevant)
-        first_relevant_index = op.ssis.data.get_temporal_variables().index(first_relevant_iter)
+        first_relevant_iter = next((iv for iv in op.ssis.data.get_temporal_variables() if iv.relevant), None)
+        if first_relevant_iter:
+            first_relevant_index = op.ssis.data.get_temporal_variables().index(first_relevant_iter)
+        else:
+            first_relevant_index = len(op.ssis.data.get_temporal_variables())
 
         last_reuse = next(
             (
@@ -793,6 +833,11 @@ class TransferToObjectFIFOPattern(RewritePattern):
         relevant_reuse_iters = [iv for iv in reuse_iters if iv.relevant]
 
         reuse_factor = prod(iv.size for iv in reuse_iters if iv.relevant)
+        access_window = prod(
+            int(shape // size) for shape, size in zip(memref_type.get_shape(), op.sizes.get_values(), strict=True)
+        )
+
+        nb_access = max(reuse_factor, access_window)
 
         # update object fifo depth
         # of.elemNumber = IntegerAttr.from_int_and_width(reuse_factor, 32)
@@ -800,7 +845,7 @@ class TransferToObjectFIFOPattern(RewritePattern):
         # acquire:
         acquire_op = ObjectFifoAcquireOp(
             IntegerAttr.from_int_and_width(port.get_int(), 32),
-            IntegerAttr.from_int_and_width(reuse_factor, 32),
+            IntegerAttr.from_int_and_width(nb_access, 32),
             object_fifo=of_name,
             shape=memref_type.get_shape(),
             element_type=memref_type.get_element_type(),
@@ -814,26 +859,31 @@ class TransferToObjectFIFOPattern(RewritePattern):
             mult_val := ConstantOp.from_int_and_width(1, IndexType()),
             add_val := ConstantOp.from_int_and_width(0, IndexType()),
         ]
-        for_op = op.parent_op()
-        assert isinstance(for_op, ForOp)
-        for iter_var in relevant_reuse_iters:
-            assert "layer_dim" in for_op.attributes
-            while for_op.attributes["layer_dim"] != StringAttr(iter_var.dimension.name):
-                for_op = for_op.parent_op()
-                assert isinstance(for_op, ForOp)
-            i_arg = MuliOp(mult_val, for_op.body.block.args[0])
-            add_val = AddiOp(add_val, i_arg)
-            mult_val = MuliOp(mult_val, for_op.ub)
-            index_ops.extend([i_arg, add_val, mult_val])
 
-        index_switch = IndexSwitchOp(
-            arg=add_val,
-            cases=DenseArrayBase.from_list(IntegerType(64), list(range(reuse_factor))),
-            default_region=Region(Block([YieldOp(access_ops[0])])),
-            case_regions=[Region(Block([YieldOp(access_ops[i])])) for i in range(reuse_factor)],
-            result_types=access_ops[0].result_types,
-        )
-        index_ops.append(index_switch)
+        if relevant_reuse_iters:
+            for_op = op.parent_op()
+            assert isinstance(for_op, ForOp)
+            for iter_var in relevant_reuse_iters:
+                assert "layer_dim" in for_op.attributes
+                while for_op.attributes["layer_dim"] != StringAttr(iter_var.dimension.name):
+                    for_op = for_op.parent_op()
+                    assert isinstance(for_op, ForOp)
+                i_arg = MuliOp(mult_val, for_op.body.block.args[0])
+                add_val = AddiOp(add_val, i_arg)
+                mult_val = MuliOp(mult_val, for_op.ub)
+                index_ops.extend([i_arg, add_val, mult_val])
+
+            index_switch = IndexSwitchOp(
+                arg=add_val,
+                cases=DenseArrayBase.from_list(IntegerType(64), list(range(reuse_factor))),
+                default_region=Region(Block([YieldOp(access_ops[0])])),
+                case_regions=[Region(Block([YieldOp(access_ops[i])])) for i in range(reuse_factor)],
+                result_types=access_ops[0].result_types,
+            )
+            index_ops.append(index_switch)
+            acquire_result = index_switch.results[0]
+        else:
+            acquire_result = access_ops[0].results[0]
 
         release_op = ObjectFIFOReleaseOp(
             IntegerAttr.from_int_and_width(port.get_int(), 32),
@@ -869,7 +919,7 @@ class TransferToObjectFIFOPattern(RewritePattern):
             assert isinstance(compute := op.input.op, ComputationNodeOp)
             new_compute = ComputationNodeOp(
                 compute.inputs,
-                index_switch.results[0],
+                acquire_result,
                 compute.kernel.data,
                 compute.core_allocation.data,
                 compute.ssis.data,
@@ -877,7 +927,7 @@ class TransferToObjectFIFOPattern(RewritePattern):
             )
             rewriter.replace_op(compute, new_compute)
 
-        operand.replace_by(index_switch.results[0])
+        operand.replace_by(acquire_result)
         rewriter.erase_matched_op()
 
         return
