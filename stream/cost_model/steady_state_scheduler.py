@@ -434,6 +434,7 @@ class SteadyStateScheduler:
             intra_core_tiling=intra_core_tiling,
             operand=tensor.operand,
             inter_core_tiling=tensor.origin.inter_core_tiling,
+            relevant_dims_override=tensor.loop_dimensions,
         )
         # Get the post transfer tensor node(s)
         grouped_post_transfer_tensor_nodes, grouped_successors = (
@@ -446,7 +447,7 @@ class SteadyStateScheduler:
         for post_transfer_tensor_nodes, successors in zip(
             grouped_post_transfer_tensor_nodes.values(), grouped_successors.values(), strict=False
         ):
-            transfer_type, size = self.get_transfer_type_and_size_for_input(post_transfer_tensor_nodes)
+            transfer_type, size = self.get_transfer_type_and_size_for_output((tensor,))
             post_transfer_tensor_node_names = [ptn.node_name for ptn in post_transfer_tensor_nodes]
             # Insert a transfer node after the node and connect it to all the successors
             transfer_node = SteadyStateTransfer(

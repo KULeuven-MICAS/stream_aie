@@ -133,6 +133,7 @@ class SteadyStateIterationSpace:
         intra_core_tiling: Iterable[tuple[LayerDim, int]],
         operand: LayerOperand | None = None,
         inter_core_tiling: TILING_T | None = None,
+        relevant_dims_override: Sequence[LayerDim] | None = None,
     ) -> SteadyStateIterationSpace:
         """
         Build the SSIS for **one operand** of a computation node.
@@ -155,20 +156,21 @@ class SteadyStateIterationSpace:
         if inter_core_tiling is None:
             inter_core_tiling = []
         # collect all R  +  PR descendants
-        if operand is None:
+        # Relevant dimensions first
+        if relevant_dims_override is not None:
+            relevant_dims = set(relevant_dims_override)
+        elif operand is None:
             relevant_dims = set()  # handled below by 'operand is None'
         else:
-            relevant_dims = set(loop_relevancy.get_r_or_pr_layer_dims(operand))
-            related_pr_dims = set(
-                dim
-                for pr_dim, orig_dims in loop_relevancy.orig_pr_loop.items()
-                if pr_dim in relevant_dims
-                for dim in orig_dims
-            )
-            relevant_dims.update(related_pr_dims)
-            # add PR loops
-            for dim in list(relevant_dims):
-                relevant_dims.update(loop_relevancy.pr_dims[operand].get(dim, []))
+            relevant_dims = set(loop_relevancy.get_r_layer_dims(operand))
+        # Partially relevant loops
+        related_pr_dims = set(
+            orig_dim
+            for pr_dim, orig_dims in loop_relevancy.orig_pr_loop.items()
+            if pr_dim in relevant_dims
+            for orig_dim in orig_dims
+        )
+        relevant_dims.update(related_pr_dims)
 
         # Spatial inter_core_tiling loop variables
         variables: list[IterationVariable] = []

@@ -183,3 +183,8 @@ class SubviewTensor:
     def loop_ranges_per_dim(self) -> "LOOP_RANGES_T":
         """Same format as ComputationNode.loop_ranges"""
         return {dim: loop_range for dim, loop_range in zip(self.loop_dimensions, self.loop_ranges, strict=False)}
+
+    @property
+    def precision(self):
+        """Get the precision from the cn source operand_precision"""
+        return self.cn_source.operand_precision[self.layer_operand]
