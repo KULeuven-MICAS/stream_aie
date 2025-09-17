@@ -111,16 +111,19 @@ class SteadyStateIterationSpace:
     """
 
     # ............................................... basic constructor ....
-    def __init__(self, variables: list[IterationVariable]) -> None:
+    def __init__(
+        self, variables: list[IterationVariable], original_pr_loops: dict[LayerDim, tuple[LayerDim, ...]]
+    ) -> None:
         self.variables: list[IterationVariable] = list(variables)
+        self.original_pr_loops: dict[LayerDim, tuple[LayerDim, ...]] = original_pr_loops
 
     def __eq__(self, other):
         if not isinstance(other, SteadyStateIterationSpace):
             return NotImplemented
-        return self.variables == other.variables
+        return self.variables == other.variables and self.original_pr_loops == other.original_pr_loops
 
     def __hash__(self):
-        return hash(tuple(self.variables))
+        return hash((tuple(self.variables), frozenset(self.original_pr_loops.items())))
 
     # ..................................................................... #
     # ── CLASS FACTORY  (replaces the old helper in SteadyStateScheduler) ── #
@@ -190,7 +193,7 @@ class SteadyStateIterationSpace:
                 iter_var.mem_tile_reuse = MemTileReuse.NO_REUSE
             variables.append(iter_var)
 
-        return cls(variables)
+        return cls(variables, loop_relevancy.orig_pr_loop)
 
     # ..................................................................... #
     # ── Convenience helpers                                                 #
@@ -299,6 +302,31 @@ class SteadyStateIterationSpace:
         Returns the list of reuses of temporal iteration variables.
         """
         return [iv.mem_tile_reuse for iv in self.get_temporal_variables()]
+
+    def get_relevant_temporal_dimensions(self) -> list[LayerDim]:
+        """
+        Returns the list of relevant temporal loop dimensions (i.e. those that are not spatial and relevant).
+        """
+        dims = [iv.dimension for iv in self.get_temporal_variables() if iv.relevant]
+        # Add keys from original_pr_loops if any of their values is relevant
+        for pr_dim, orig_dims in self.original_pr_loops.items():
+            if any(d in dims for d in orig_dims):
+                dims.append(pr_dim)
+        return dims
+
+    def is_relevant(self, dim: LayerDim) -> bool:
+        """
+        Returns whether a given dimension is relevant in this SSIS.
+        """
+        for iv in self.variables:
+            if iv.dimension == dim:
+                return iv.relevant
+        # Go through the original PR loops to see if the dimension is partially relevant
+        if dim in self.original_pr_loops:
+            if any(d in (iv.dimension for iv in self.variables if iv.relevant) for d in self.original_pr_loops[dim]):
+                return True
+            return False
+        raise ValueError(f"Dimension {dim} not found in SSIS.")
 
     # ..................................................................... #
     # ── Iteration / pretty printing                                         #

@@ -311,7 +311,10 @@ class SteadyStateScheduler:
             intra_core_tiling=intra_core_tiling,
             operand=tensor.operand,
             inter_core_tiling=tensor.origin.inter_core_tiling,
+            relevant_dims_override=tensor.loop_dimensions,
         )
+        # Compute the actual transfer size for the steady state
+        unique_size = self.get_constant_input_steady_state_transfer_size(tensor, all_successors, ssis)
         # Get the post transfer tensor node(s)
         grouped_post_transfer_tensor_nodes, grouped_successors = (
             self.get_grouped_post_transfer_tensor_nodes_and_successors(
@@ -335,6 +338,7 @@ class SteadyStateScheduler:
                 tensor=tensor,
                 possible_resource_allocation=tuple(),  # will be set later by 'set_transfer_paths'
                 steady_state_iteration_space=ssis,
+                steady_state_transfer_size=unique_size,  # in elements
             )
             ssw.add(transfer_node)
             # Add edge from the original node to the transfer node
@@ -379,6 +383,7 @@ class SteadyStateScheduler:
         for pre_transfer_tensor_nodes, predecessors in zip(
             grouped_pre_transfer_tensor_nodes.values(), grouped_predecessors.values(), strict=False
         ):
+            unique_size = tuple(ub - lb for (lb, ub) in pre_transfer_tensor_nodes[0].loop_ranges)
             transfer_type, size = self.get_transfer_type_and_size_for_output(pre_transfer_tensor_nodes)
             pre_transfer_tensor_node_names = [ptn.node_name for ptn in pre_transfer_tensor_nodes]
             # Insert a transfer node after the node and connect it to all the successors
@@ -392,6 +397,7 @@ class SteadyStateScheduler:
                 tensor=tensor,
                 possible_resource_allocation=tuple(),  # will be set later by 'set_transfer_paths'
                 steady_state_iteration_space=ssis,
+                steady_state_transfer_size=unique_size,  # in elements
             )
             ssw.add(transfer_node)
             # Add edge from transfer node to output tensor node
@@ -447,6 +453,7 @@ class SteadyStateScheduler:
         for post_transfer_tensor_nodes, successors in zip(
             grouped_post_transfer_tensor_nodes.values(), grouped_successors.values(), strict=False
         ):
+            unique_size = tuple(ub - lb for (lb, ub) in tensor.loop_ranges)
             transfer_type, size = self.get_transfer_type_and_size_for_output((tensor,))
             post_transfer_tensor_node_names = [ptn.node_name for ptn in post_transfer_tensor_nodes]
             # Insert a transfer node after the node and connect it to all the successors
@@ -460,6 +467,7 @@ class SteadyStateScheduler:
                 tensor=tensor,
                 possible_resource_allocation=tuple(),  # will be set later by 'set_transfer_paths'
                 steady_state_iteration_space=ssis,
+                steady_state_transfer_size=unique_size,  # in elements
             )
             ssw.add(transfer_node)
             # Add edge from the original node to the transfer node
@@ -477,6 +485,47 @@ class SteadyStateScheduler:
                 )
                 # Add edge from post transfer node to successor
                 ssw.add_edge(ptn, succ, **edge_data)
+
+    def get_constant_input_steady_state_transfer_size(
+        self, tensor: SteadyStateTensor, all_successors: list[SteadyStateNode], ssis: SteadyStateIterationSpace
+    ) -> tuple[int, ...]:
+        # Get the difference in loop ranges between the input tensor of this iteration and the previous iteration.
+        # This is the case in e.g. conv stacks where the input tensor is larger than what is needed to be transferred
+        # as the previous iterations have overlap with this one.
+        # If there is no previous iteration, we assume that the size is the full size of the tensor of this iteration.
+        operand = tensor.operand
+        assert len(all_successors) == 1, "Check that the logic below holds for multiple successors."
+        ssw_node = all_successors[0]
+        this_iter_node = next(n for n in self.workload.nodes() if n.id == ssw_node.id and n.sub_id == ssw_node.sub_id)
+        current_input = this_iter_node.operand_tensors[operand]
+        assert isinstance(current_input, SubviewTensor)
+        preds_with_same_id = [p for p in self.workload.predecessors(this_iter_node) if p.id == this_iter_node.id]
+        assert len(preds_with_same_id) <= 1, "There should be at most one predecessor with the same id."
+        if len(preds_with_same_id) == 0:
+            return current_input.loop_ranges_per_dim
+        # Get the inputs of this and previous iteration
+        pred = preds_with_same_id[0]
+        previous_input = pred.operand_tensors[operand]
+        assert isinstance(current_input, SubviewTensor) and isinstance(previous_input, SubviewTensor)
+        # Go through the relevant dimensino in ssis and calculate the difference in size for those ones
+        # The irrelevant ones size are taken to be the entire loop range
+        relevant_ssis_dims = ssis.get_relevant_temporal_dimensions()
+        updated_ranges = {}
+        for dim, current_range in current_input.loop_ranges_per_dim.items():
+            if dim in relevant_ssis_dims:
+                previous_range = previous_input.loop_ranges_per_dim[dim]
+                # Calculate the unique range in current_range that is not covered by previous_range
+                prev_lb, prev_ub = previous_range
+                curr_lb, curr_ub = current_range
+                # The unique part is from max(prev_ub, curr_lb) to curr_ub (exclusive)
+                unique_lb = max(prev_ub, curr_lb)
+                unique_ub = curr_ub
+                unique_range = (unique_lb, unique_ub)
+            else:
+                unique_range = current_range
+            updated_ranges[dim] = unique_range
+        updated_size = tuple(ub - lb for lb, ub in updated_ranges.values())
+        return updated_size
 
     def get_transfer_type_and_size_for_input(
         self, post_transfer_tensor_nodes: tuple[SteadyStateTensor, ...]

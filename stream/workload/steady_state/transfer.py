@@ -30,6 +30,7 @@ class SteadyStateTransfer(SteadyStateNode):
         tensor: SteadyStateTensor,
         possible_resource_allocation: tuple[tuple[CommunicationLink, ...], ...],
         steady_state_iteration_space: SteadyStateIterationSpace,
+        steady_state_transfer_size: tuple[int, ...],  # in elements
     ):
         super().__init__(
             id=id,
@@ -50,6 +51,7 @@ class SteadyStateTransfer(SteadyStateNode):
                 possible_resource_allocation[0] if len(possible_resource_allocation) == 1 else None
             )
         self.chosen_memory_core: Core | None = None
+        self.steady_state_transfer_size = steady_state_transfer_size
 
     def set_possible_resource_allocation(self, allocation: tuple[tuple[CommunicationLink, ...], ...]) -> None:
         assert len(allocation) > 0, "Allocation must not be empty."
