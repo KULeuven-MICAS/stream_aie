@@ -502,7 +502,8 @@ class SteadyStateScheduler:
         preds_with_same_id = [p for p in self.workload.predecessors(this_iter_node) if p.id == this_iter_node.id]
         assert len(preds_with_same_id) <= 1, "There should be at most one predecessor with the same id."
         if len(preds_with_same_id) == 0:
-            return current_input.loop_ranges_per_dim
+            updated_size = tuple(ub - lb for lb, ub in current_input.loop_ranges)
+            return updated_size
         # Get the inputs of this and previous iteration
         pred = preds_with_same_id[0]
         previous_input = pred.operand_tensors[operand]
