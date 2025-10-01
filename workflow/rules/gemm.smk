@@ -10,13 +10,14 @@ rule run_stream_aie_to_generate_mlir_output:
         "outputs/{stream_hw_id}-gemm_{M}_{K}_{N}-{nb_rows}_row_{nb_cols}_col/output.mlir"
     params:
         trace_size = lambda wc: TRACE_SIZE[wc.stream_hw_id],
+        npu = config["npu"],
         stream_main_file = lambda wc: STREAM_MAIN_FILE[wc.stream_hw_id]
     shell:
         """
         python3 {params.stream_main_file} \
             --M {wildcards.M} --K {wildcards.K} --N {wildcards.N} \
             --rows {wildcards.nb_rows} --cols {wildcards.nb_cols} \
-            --trace_size {params.trace_size} | tee {output}.log
+            --trace_size {params.trace_size} --npu {params.npu} | tee {output}.log
         """
 
 rule copy_stream_mlir_output_to_mlir_aie:
