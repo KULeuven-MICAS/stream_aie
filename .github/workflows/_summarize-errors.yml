@@ -19,11 +19,11 @@ jobs:
           name: outputs-raw
           path: outputs
 
-      - name: Cache Python virtualenv
-        uses: actions/cache@v4
-        with:
-          path: .venv
-          key: venv-${{ runner.os }}-${{ hashFiles('requirements.txt') }}
+      # - name: Cache Python virtualenv
+      #   uses: actions/cache@v4
+      #   with:
+      #     path: .venv
+      #     key: venv-${{ runner.os }}-${{ hashFiles('requirements.txt') }}
 
       - name: Setup Python env
         shell: bash -l {0}
