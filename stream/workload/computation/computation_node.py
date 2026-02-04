@@ -429,6 +429,6 @@ class GeneratedComputationNode(ComputationNode):
             and self.dimension_relations == other.dimension_relations
             and self.operand_precision == other.operand_precision
             and self.memory_operand_links == other.memory_operand_links
-            and self.nb_real_predecessors == other.nb_real_predecessors
+            # and self.nb_real_predecessors == other.nb_real_predecessors
             and self.base_id == other.base_id
         )

@@ -27,12 +27,16 @@ _logging.basicConfig(level=_logging_level, format=_logging_format)
 
 
 def _sanity_check_inputs(
-    hardware: str, workload: str, mapping: str, mode: Literal["lbl"] | Literal["fused"], output_path: str
+    hardware: str,
+    workload: str,
+    mapping: str,
+    mode: Literal["lbl"] | Literal["fused"] | Literal["fused_topology"],
+    output_path: str,
 ):
     assert os.path.exists(hardware), f"Hardware file {hardware} does not exist"
     assert isinstance(workload, ModelProto) or os.path.exists(workload), f"Workload file {workload} does not exist"
     assert os.path.exists(mapping), f"Mapping file {mapping} does not exist"
-    assert mode in ["lbl", "fused"], "Mode must be either 'lbl' or 'fused'"
+    assert mode in ["lbl", "fused", "fused_topology"], "Mode must be 'lbl', 'fused', or 'fused_topology'"
     if not os.path.exists(output_path):
         os.makedirs(output_path)
 
@@ -59,7 +63,7 @@ def optimize_allocation_ga(  # noqa: PLR0913
     hardware: str,
     workload: str,
     mapping: str,
-    mode: Literal["lbl"] | Literal["fused"],
+    mode: Literal["lbl"] | Literal["fused"] | Literal["fused_topology"],
     layer_stacks: list[tuple[int, ...]],
     nb_ga_generations: int,
     nb_ga_individuals: int,
@@ -133,7 +137,7 @@ def optimize_allocation_co(  # noqa: PLR0913
     hardware: str,
     workload: str,
     mapping: str,
-    mode: Literal["lbl"] | Literal["fused"],
+    mode: Literal["lbl"] | Literal["fused"] | Literal["fused_topology"],
     layer_stacks: list[tuple[int, ...]],
     experiment_id: str,
     output_path: str,

@@ -79,6 +79,7 @@ class CoreCostEstimationStage(Stage):
 
         # Extract all unique nodes that will have to be evaluated
         self.unique_nodes = get_unique_nodes(self.workload)
+        logger.info(f"Number of unique nodes to evaluate: {len(self.unique_nodes)}")
 
         assert all(isinstance(node, ComputationNode) for node in self.unique_nodes), (
             "CoreCostEstimationStage received a non-ComputationNode."
@@ -107,6 +108,7 @@ class CoreCostEstimationStage(Stage):
 
     def run(self):
         logger.info("Start CoreCostEstimationStage.")
+        print("Start CoreCostEstimationStage.")
         self.update_cost_lut()
         self.visualize_cost_lut()
         logger.info("Finished CoreCostEstimationStage.")
@@ -116,7 +118,10 @@ class CoreCostEstimationStage(Stage):
         yield from sub_stage.run()
 
     def update_cost_lut(self):
-        for node in self.unique_nodes:
+        for i, node in enumerate(self.unique_nodes):
+            msg = f"Processing unique node {i+1}/{len(self.unique_nodes)}: {node}"
+            logger.info(msg)
+            print(msg)
             seen_new = False
             core_ids = self.valid_allocations[node]
             for core_id in core_ids:

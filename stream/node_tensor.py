@@ -163,7 +163,12 @@ class NodeTensor(np.ndarray[Any, Any]):
             return np.concat((self.as_ndarray(), empty_tensor), axis=axis).view(NodeTensor)
 
     def concat_with_empty_both_sides(
-        self, output_shape: tuple[int, ...], axis: int, slice_idx: int, axis_exists_in_input: bool = False
+        self,
+        output_shape: tuple[int, ...],
+        axis: int,
+        slice_start: int,
+        slice_stop: int,
+        axis_exists_in_input: bool = False,
     ):
         """Return a new tensor with shape `output_shape` that is all zero, except for the slice at `slice_idx` in
         the given axis. This slice is equal to this instance.
@@ -174,15 +179,19 @@ class NodeTensor(np.ndarray[Any, Any]):
 
         if axis_exists_in_input:
             assert len(output_shape) == len(self.tensor_shape)
-            assert self.tensor_shape[axis] == 1
+            # assert self.tensor_shape[axis] == 1
             # Remove the size-1 dimension
-            slice_to_assign = np.squeeze(self, axis)
+            # slice_to_assign = np.squeeze(self, axis)
+            slice_to_assign = self
         else:
             assert len(output_shape) == len(self.tensor_shape) + 1
             slice_to_assign = self
 
         slices = [slice(None)] * len(full_shape)
-        slices[axis] = slice_idx  # type: ignore
+        # Handle negative axis
+        if axis < 0:
+            axis += len(output_shape)
+        slices[axis] = slice(slice_start, slice_stop)
 
         full_tensor[tuple(slices)] = slice_to_assign
         return full_tensor.view(NodeTensor)

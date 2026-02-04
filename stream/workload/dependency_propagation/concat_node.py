@@ -77,6 +77,7 @@ class ConcatNode(PropagationNode):
         output_shape: tuple[int, ...],
         input_names: list[str] | None = None,
         axis_exists_in_input: bool = False,
+        input_shapes: list[tuple[int, ...]] | None = None,
     ) -> None:
         """Initialize the ConcatConstantNode
 
@@ -85,6 +86,7 @@ class ConcatNode(PropagationNode):
             axis: axis in which the inputs are concatenated
             output_shape: the shape of the output
             axis_exists_in_input: whether the input already has the axis over which the concationation happens
+            input_shapes: list of shapes of input tensors
 
         """
         if input_names is None:
@@ -94,6 +96,7 @@ class ConcatNode(PropagationNode):
         self.axis = axis
         self.output_shape = output_shape
         self.axis_exists_in_input = axis_exists_in_input
+        self.input_shapes = input_shapes
 
         self.input_operand_source = {LayerOperand(f"I{i}"): node_id for i, node_id in enumerate(predecessors)}
 
@@ -108,20 +111,57 @@ class ConcatNode(PropagationNode):
         concat node output. Return a tensor of all zeros except the input tensor at the correct index"""
         if relevant_axes is None:
             relevant_axes = [False] * len(tensor.tensor_shape)
-        assert isinstance(previous_node, GeneratedComputationNode), (
-            "Concat only supported for procedurally generated nodes for now"
-        )
-        assert not self.axis_exists_in_input or (
-            len(tensor.tensor_shape) == len(self.output_shape) and tensor.tensor_shape[self.axis] == 1
-        ), """Input tensor does not have size-1 dimension to concatenate on"""
 
-        slice_idx = previous_node.gen_id
-        extended_tensor = tensor.concat_with_empty_both_sides(
-            output_shape=self.output_shape,
-            axis=self.axis,
-            slice_idx=slice_idx,
-            axis_exists_in_input=self.axis_exists_in_input,
-        )
+        slice_start = 0
+        slice_stop = 0
+        
+        if isinstance(previous_node, GeneratedComputationNode):
+            slice_idx = previous_node.gen_id
+            # Assuming generated nodes have size 1 in concat axis? Or handled differently?
+            # For now keep old behavior for generated nodes if possible, but concat_with_empty_both_sides changed signature
+            # If we assume generated nodes are size 1 slices:
+            slice_start = slice_idx
+            slice_stop = slice_idx + 1
+        else:
+            # Find which input operand corresponds to previous_node
+            input_op = next(
+                op for op, nid in self.input_operand_source.items() if nid == previous_node.id
+            )
+            # input_op is like "I0", "I1". Extract index.
+            input_idx = int(input_op.name[1:])
+            
+            if self.input_shapes:
+                # Calculate offset based on previous inputs
+                offset = 0
+                for i in range(input_idx):
+                    offset += self.input_shapes[i][self.axis]
+                slice_start = offset
+                slice_stop = offset + self.input_shapes[input_idx][self.axis]
+            else:
+                # Fallback to index if shapes not available (assumes size 1 inputs)
+                slice_start = input_idx
+                slice_stop = input_idx + 1
+
+        # assert not self.axis_exists_in_input or (
+        #     len(tensor.tensor_shape) == len(self.output_shape) and tensor.tensor_shape[self.axis] == 1
+        # ), """Input tensor does not have size-1 dimension to concatenate on"""
+
+        try:
+            extended_tensor = tensor.concat_with_empty_both_sides(
+                output_shape=self.output_shape,
+                axis=self.axis,
+                slice_start=slice_start,
+                slice_stop=slice_stop,
+                axis_exists_in_input=self.axis_exists_in_input,
+            )
+        except ValueError as e:
+            print(f"DEBUG: Error in ConcatNode {self.name} ({self.id})")
+            print(f"Axis: {self.axis}")
+            print(f"Output Shape: {self.output_shape}")
+            print(f"Input Tensor Shape: {tensor.tensor_shape}")
+            print(f"Slice Start: {slice_start}, Stop: {slice_stop}")
+            print(f"Previous Node: {previous_node}")
+            raise e
 
         # Log this axis as relevant
         relevant_axes[self.axis] = True

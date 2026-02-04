@@ -23,6 +23,7 @@ from stream.parser.onnx.reciprocal import ReciprocalParser
 from stream.parser.onnx.reduce_1d import Reduce1DParser
 from stream.parser.onnx.relu import ReluParser
 from stream.parser.onnx.reshape import ReshapeParser
+from stream.parser.onnx.resize import ResizeParser
 from stream.parser.onnx.sigmoid import SigmoidParser
 from stream.parser.onnx.simd import SimdParser
 from stream.parser.onnx.slice import SliceParser
@@ -73,6 +74,7 @@ class ONNXModelParser:
         "Gather": GatherParser,
         "Transpose": TransposeParser,
         "Reshape": ReshapeParser,
+        "Resize": ResizeParser,
         "Flatten": FlattenParser,
         "Concat": ConcatParser,
         "Split": SplitParser,

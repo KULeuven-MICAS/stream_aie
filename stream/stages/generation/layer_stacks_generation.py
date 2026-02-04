@@ -57,6 +57,8 @@ class LayerStacksGenerationStage(Stage):
 
         elif self.mode == "lbl":
             self.layer_stacks = self.get_layer_stacks_lbl()
+        elif self.mode == "fused_topology":
+            self.layer_stacks = self.get_layer_stacks_fused_topology_aware()
         else:
             raise ValueError("Unsupported mode for layer stack determination.")
 
@@ -222,5 +224,104 @@ class LayerStacksGenerationStage(Stage):
                         current_stack.append(id)
         # Add last stack
         stacks.append(tuple(current_stack))
+
+        return stacks
+
+    def get_layer_stacks_fused_topology_aware(self):
+        """
+        Generate layer stacks that respect topology constraints (single sink per stack) and weight capacity.
+        """
+        stacks: list[tuple[int, ...]] = []
+        current_stack: list[int] = []
+        current_weight = 0
+        last_valid_split_index = -1  # Index in current_stack
+
+        sorted_nodes = sorted(list(self.workload.node_list), key=lambda n: n.id)
+
+        # Helper to check if current_stack has single sink
+        def has_single_sink(stack_ids):
+            sinks = []
+            for node_id in stack_ids:
+                node = self.workload.get_node_with_id(node_id)
+                successors = list(self.workload.successors(node))
+                # If any successor is NOT in stack, node is a sink
+                is_sink = False
+                if not successors:
+                    is_sink = True
+                else:
+                    for succ in successors:
+                        if succ.id not in stack_ids:
+                            is_sink = True
+                            break
+                if is_sink:
+                    sinks.append(node_id)
+            return len(sinks) <= 1
+
+        for n in sorted_nodes:
+            if not isinstance(n, ComputationNode):
+                continue
+
+            id = n.id
+
+            # Calculate weight
+            weight = 0
+            for op in n.constant_operands:
+                weight += n.operand_size_bit[op]
+
+            # Tentatively add to stack
+            current_stack.append(id)
+            current_weight += weight
+
+            # Check topology
+            if has_single_sink(current_stack):
+                last_valid_split_index = len(current_stack) - 1  # Index in current_stack
+
+            # Check capacity
+            ratio = current_weight / self.total_weight_capacity
+            if ratio > 1:
+                # Must split
+                # Split at last valid split point
+                if last_valid_split_index == -1:
+                    # No valid split point found in current stack!
+                    # We force split at current node (and accept potential error or inefficiency)
+                    if len(current_stack) > 1:
+                        # Split before current node
+                        stack_to_add = tuple(current_stack[:-1])
+                        stacks.append(stack_to_add)
+                        current_stack = [id]
+                        current_weight = weight
+                        last_valid_split_index = 0  # Reset
+                    else:
+                        # Single node exceeds capacity. Must accept it.
+                        stacks.append(tuple(current_stack))
+                        current_stack = []
+                        current_weight = 0
+                        last_valid_split_index = -1
+                else:
+                    # Split at last_valid_split_index
+                    # stack is current_stack[:last_valid_split_index+1]
+                    stack_to_add = tuple(current_stack[: last_valid_split_index + 1])
+                    stacks.append(stack_to_add)
+
+                    # Remaining nodes start new stack
+                    remaining_nodes = current_stack[last_valid_split_index + 1 :]
+                    current_stack = remaining_nodes
+
+                    # Recalculate weight for new stack
+                    current_weight = 0
+                    for nid in current_stack:
+                        node = self.workload.get_node_with_id(nid)
+                        for op in node.constant_operands:
+                            current_weight += node.operand_size_bit[op]
+
+                    # Reset last_valid_split_index
+                    # We need to check if new current_stack is valid
+                    if has_single_sink(current_stack):
+                        last_valid_split_index = len(current_stack) - 1
+                    else:
+                        last_valid_split_index = -1
+
+        if current_stack:
+            stacks.append(tuple(current_stack))
 
         return stacks

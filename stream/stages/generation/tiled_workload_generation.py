@@ -870,6 +870,33 @@ class TiledWorkloadGenerationStage(Stage):
             if dim in dimensions and size > 1:
                 relevant_axes[dimensions.index(dim)] = True
 
+        # Handle grouped convolution (5D -> 4D)
+        if len(dimensions) == 5 and len(tensor.tensor_shape) == 4:
+            if LayerDim("G") in dimensions:
+                # Merge G and C/K
+                dim_G = LayerDim("G")
+                dim_C = LayerDim("C")
+                dim_K = LayerDim("K")
+                
+                G_idx = dimensions.index(dim_G)
+                if dim_C in dimensions:
+                    C_K_idx = dimensions.index(dim_C)
+                elif dim_K in dimensions:
+                    C_K_idx = dimensions.index(dim_K)
+                else:
+                    return relevant_axes
+                
+                # Merge relevant flags
+                is_relevant = relevant_axes[G_idx] or relevant_axes[C_K_idx]
+                
+                # Remove G and C/K, insert CH
+                min_idx = min(G_idx, C_K_idx)
+                max_idx = max(G_idx, C_K_idx)
+                
+                relevant_axes.pop(max_idx)
+                relevant_axes.pop(min_idx)
+                relevant_axes.insert(min_idx, is_relevant)
+
         return relevant_axes
 
     def get_tensor_cn_for_op(self, node: ComputationNode, dependent_operand: LayerOperand):
@@ -898,9 +925,31 @@ class TiledWorkloadGenerationStage(Stage):
         """
         inter_edges: set[tuple[ComputationNode, ComputationNode]] = set()
         dims = final_node.operand_dimensionality_order[op]
+
+        # Handle grouped convolution (5D -> 4D)
+        if len(dims) == 5 and len(relevant_axes) == 4:
+            if LayerDim("G") in dims:
+                dummy_ranges = {d: (0, 1) for d in dims}
+                dims, _ = self.flatten_grouped_convolution_ranges(final_node, final_node, dims, dummy_ranges)
+
+        if len(dims) != len(relevant_axes):
+            logger.error(f"DEBUG: Mismatch in get_inter_edges_hybrid")
+            logger.error(f"Final Node: {final_node}")
+            logger.error(f"Operand: {op}")
+            logger.error(f"Dims: {dims}")
+            logger.error(f"Relevant Axes: {relevant_axes}")
+            logger.error(f"Tensor Shape: {tensor.tensor_shape}")
         assert len(dims) == len(relevant_axes)
         for consumer_tile in self.tiles_dict[final_node]:
-            relevant_loop_ranges = [consumer_tile.loop_ranges[dim] for dim in dims]
+            # If we flattened the dimensions, we also need to flatten the loop ranges of the consumer tile
+            # to match the flattened dimensions
+            consumer_loop_ranges = consumer_tile.loop_ranges
+            if len(consumer_tile.operand_dimensionality_order[op]) == 5 and len(dims) == 4:
+                 _, consumer_loop_ranges = self.flatten_grouped_convolution_ranges(
+                    final_node, final_node, final_node.operand_dimensionality_order[op], consumer_tile.loop_ranges
+                )
+
+            relevant_loop_ranges = [consumer_loop_ranges[dim] for dim in dims]
             # Override loop ranges of irrelevant axes to only include a single slice
             for i, relevant in enumerate(relevant_axes):
                 if not relevant:

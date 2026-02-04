@@ -1,0 +1,85 @@
+- name: default
+  core_allocation: [2, 3, 4, 5, 8, 9, 10, 11, 14, 15, 16, 17, 20, 21, 22, 23, 26, 27, 28, 29, 32, 33, 34, 35, 38, 39, 40, 41, 44, 45, 46, 47]
+  intra_core_tiling:
+    - D, 1
+  inter_core_tiling: []
+
+- name: Conv
+  core_allocation: [2, 3, 4, 5, 8, 9, 10, 11, 14, 15, 16, 17, 20, 21, 22, 23, 26, 27, 28, 29, 32, 33, 34, 35, 38, 39, 40, 41, 44, 45, 46, 47]
+  intra_core_tiling:
+    - OX, 1
+    - OY, 1
+  inter_core_tiling:
+    - OY, 8
+
+- name: MatMul
+  core_allocation: [2, 3, 4, 5, 8, 9, 10, 11, 14, 15, 16, 17, 20, 21, 22, 23, 26, 27, 28, 29, 32, 33, 34, 35, 38, 39, 40, 41, 44, 45, 46, 47]
+  intra_core_tiling:
+    - D, 1
+    - K, 1
+  inter_core_tiling:
+    - K, 8
+
+- name: Add
+  core_allocation: [2, 3, 4, 5, 8, 9, 10, 11, 14, 15, 16, 17, 20, 21, 22, 23, 26, 27, 28, 29, 32, 33, 34, 35, 38, 39, 40, 41, 44, 45, 46, 47]
+  intra_core_tiling:
+    - D, 1
+  inter_core_tiling:
+    - D, 8
+
+- name: Sub
+  core_allocation: [2, 3, 4, 5, 8, 9, 10, 11, 14, 15, 16, 17, 20, 21, 22, 23, 26, 27, 28, 29, 32, 33, 34, 35, 38, 39, 40, 41, 44, 45, 46, 47]
+  intra_core_tiling:
+    - D, 1
+  inter_core_tiling:
+    - D, 8
+
+- name: Mul
+  core_allocation: [2, 3, 4, 5, 8, 9, 10, 11, 14, 15, 16, 17, 20, 21, 22, 23, 26, 27, 28, 29, 32, 33, 34, 35, 38, 39, 40, 41, 44, 45, 46, 47]
+  intra_core_tiling:
+    - D, 1
+  inter_core_tiling:
+    - D, 8
+
+- name: Div
+  core_allocation: [2, 3, 4, 5, 8, 9, 10, 11, 14, 15, 16, 17, 20, 21, 22, 23, 26, 27, 28, 29, 32, 33, 34, 35, 38, 39, 40, 41, 44, 45, 46, 47]
+  intra_core_tiling:
+    - D, 1
+  inter_core_tiling:
+    - D, 8
+
+- name: Sigmoid
+  core_allocation: [2, 3, 4, 5, 8, 9, 10, 11, 14, 15, 16, 17, 20, 21, 22, 23, 26, 27, 28, 29, 32, 33, 34, 35, 38, 39, 40, 41, 44, 45, 46, 47]
+  intra_core_tiling:
+    - D, 1
+  inter_core_tiling:
+    - D, 8
+
+- name: Softmax
+  core_allocation: [2, 3, 4, 5, 8, 9, 10, 11, 14, 15, 16, 17, 20, 21, 22, 23, 26, 27, 28, 29, 32, 33, 34, 35, 38, 39, 40, 41, 44, 45, 46, 47]
+  intra_core_tiling:
+    - D, 1
+  inter_core_tiling:
+    - D, 4
+
+- name: MaxPool
+  core_allocation: [2, 3, 4, 5, 8, 9, 10, 11, 14, 15, 16, 17, 20, 21, 22, 23, 26, 27, 28, 29, 32, 33, 34, 35, 38, 39, 40, 41, 44, 45, 46, 47]
+  intra_core_tiling:
+    - OX, 1
+    - OY, 1
+  inter_core_tiling:
+    - OY, 8
+
+- name: Resize
+  core_allocation: [2, 3, 4, 5, 8, 9, 10, 11, 14, 15, 16, 17, 20, 21, 22, 23, 26, 27, 28, 29, 32, 33, 34, 35, 38, 39, 40, 41, 44, 45, 46, 47]
+  intra_core_tiling:
+    - D, 1
+  inter_core_tiling:
+    - D, 8
+
+- name: Concat
+  core_allocation: [2, 3, 4, 5, 8, 9, 10, 11, 14, 15, 16, 17, 20, 21, 22, 23, 26, 27, 28, 29, 32, 33, 34, 35, 38, 39, 40, 41, 44, 45, 46, 47]
+  intra_core_tiling:
+    - D, 1
+  inter_core_tiling:
+    - D, 8

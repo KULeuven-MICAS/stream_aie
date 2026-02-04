@@ -64,6 +64,12 @@ def get_constant_tensor_int(onnx_model: ModelProto, constant_output_name: str):
     node. The output name of the constant nodes corresponds to the input name of the node that uses this constant
     tensor."""
 
+    # Check initializers first
+    for initializer in onnx_model.graph.initializer:
+        if initializer.name == constant_output_name:
+            array = numpy_helper.to_array(initializer)
+            return [int(i) for i in array.flatten()]
+
     for node in onnx_model.graph.node:
         if node.op_type == "Constant" and node.output[0] == constant_output_name:
             for attr in node.attribute:
@@ -93,6 +99,11 @@ def get_axis_attribute(node: NodeProto):
 
 
 def get_split_attribute(node: NodeProto, onnx_model: ModelProto):
+    try:
+        return get_attribute_as_ints(node, "split")
+    except ValueError:
+        pass
+
     output_name = next(n for n in node.input if "split" in n.lower())
     return get_constant_tensor_int(onnx_model, output_name)
 
@@ -100,14 +111,33 @@ def get_split_attribute(node: NodeProto, onnx_model: ModelProto):
 def get_slice_attributes(node: NodeProto, onnx_model: ModelProto):
     """Get the `starts`, `ends`, `axes` and `steps` tensors for a slice node.
     NOTE: this assumes that the attributes are given as inputs in this order"""
-    EXPECTED_INPUT_LENGTH = 5
-    if len(node.input) != EXPECTED_INPUT_LENGTH:
-        raise NotImplementedError("Unsure how to get slice attributes from Node")
+    # Inputs: data, starts, ends, axes (optional), steps (optional)
+    if len(node.input) < 3:
+        raise NotImplementedError("Slice node must have at least 3 inputs (data, starts, ends)")
 
-    starts_output_name, ends_output_name, axes_output_name, steps_output_name = node.input[1:5]
+    starts_output_name = node.input[1]
+    ends_output_name = node.input[2]
 
     starts_value = get_constant_tensor_int(onnx_model, starts_output_name)
     ends_value = get_constant_tensor_int(onnx_model, ends_output_name)
-    axes_value = get_constant_tensor_int(onnx_model, axes_output_name)
-    steps_value = get_constant_tensor_int(onnx_model, steps_output_name)
+
+    axes_value = None
+    if len(node.input) > 3:
+        axes_output_name = node.input[3]
+        if axes_output_name:
+            axes_value = get_constant_tensor_int(onnx_model, axes_output_name)
+
+    steps_value = None
+    if len(node.input) > 4:
+        steps_output_name = node.input[4]
+        if steps_output_name:
+            steps_value = get_constant_tensor_int(onnx_model, steps_output_name)
+
+    # Defaults
+    if axes_value is None:
+        axes_value = list(range(len(starts_value)))
+
+    if steps_value is None:
+        steps_value = [1] * len(starts_value)
+
     return starts_value, ends_value, axes_value, steps_value
