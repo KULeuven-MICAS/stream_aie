@@ -44,6 +44,8 @@ from xdsl_aie.dialects.aie import (
     AIEDeviceEnum,
     BDDimLayout,
     BDDimLayoutArray,
+    BDDimLayoutArrayArray,
+    BDDimLayoutArrayArrayAttr,
     BDDimLayoutArrayAttr,
     Block,
     CoreOp,
@@ -751,6 +753,9 @@ class TransferToRuntimeSequence(RewritePattern):
             iteration_t: int
             spatial: bool = False
 
+            def __str__(self) -> str:
+                return f"{self.size}x{self.stride}"
+
         @dataclass(frozen=True)
         class StrideSet:
             strides: tuple[Stride, ...]
@@ -776,6 +781,41 @@ class TransferToRuntimeSequence(RewritePattern):
                 for i in range(spatial_stride.size):
                     result[i * spatial_stride.stride] = type(self)(new_strides)
                 return result
+
+            def cap_elements(self, cap: int) -> tuple[Self, int]:
+                """
+                Split loops in the stride set such that the n innermost
+                strides compromise exactly `cap` elements.
+                Returns the new stride set and the number of innermost loops.
+                """
+                for i in range(1, len(self.strides) + 1):
+                    num_elements = prod(x.size for x in self.strides[:i])
+                    if num_elements < cap:
+                        continue
+                    if num_elements == cap:
+                        return (self, i)
+                    if num_elements > cap:
+                        raise NotImplementedError("this is implemented, but not really checked yet for correctness")
+                        # get stride to split:
+                        stride = self.strides[i]
+                        if num_elements % cap != 0:
+                            raise RuntimeError("failed to cap strideset: not divisible")
+                        tile_factor = num_elements // cap
+                        tiled_size = stride.size // tile_factor
+                        tiled_stride = Stride(tiled_size, stride.stride, stride.iteration_t)
+                        tiling_stride = Stride(tile_factor, stride.stride * tiled_size, stride.iteration_t * tiled_size)
+                        return (
+                            type(self)(
+                                (
+                                    *self.strides[:i],
+                                    tiled_stride,
+                                    tiling_stride,
+                                    *self.strides[i + 1 :],
+                                )
+                            ),
+                            i,
+                        )
+                raise RuntimeError("not enough elements to cap")
 
             def canonicalize(self) -> Self:
                 if any(s.spatial for s in self.strides):
@@ -840,6 +880,9 @@ class TransferToRuntimeSequence(RewritePattern):
                 repeat_size = prod(var.size for var in self.strides if not var.stride)
                 return type(self)((Stride(total_size, 1, 0), Stride(repeat_size, 0, 0)))
 
+            def __str__(self) -> str:
+                return ", ".join(map(str, self.strides))
+
         strides: list[Stride] = []
 
         for var in all_vars:
@@ -861,6 +904,42 @@ class TransferToRuntimeSequence(RewritePattern):
             hop = of_chain.hops[1]
         else:
             hop = of_chain.hops[0]
+
+        for i, (offset, stride_set) in enumerate(stride_dict.items()):
+            if isinstance(op, PullOp):
+                # TODO: also do this for output transfers
+                continue
+            fifo = hop.fifos[i]
+            link = of_chain.links[i]
+            assert isa(buffer := fifo.elemType.buffer, MemRefType[FixedBitwidthType])
+            element_count = buffer.element_count() // len(link.dst_offsets)
+            capped_set, num_loops = stride_set.cap_elements(element_count)
+            num_transform_dimensions_memtile_in = 4
+            assert num_loops <= num_transform_dimensions_memtile_in
+            inner_strides = capped_set.strides[:num_loops]
+            outer_strides = capped_set.strides[num_loops:]
+            to_sort: list[tuple[Stride, Stride]] = []
+            for stride in inner_strides:
+                to_sort.append((stride, Stride(stride.size, prod(x[0].size for x in to_sort), 0, False)))
+            to_sort = sorted(to_sort, key=lambda x: x[0].stride)
+            inner_strides = [x[0] for x in to_sort]
+            new_stride_set = StrideSet((*inner_strides, *outer_strides)).canonicalize().legalize()
+            stride_dict[offset] = new_stride_set
+            memtile_transform = StrideSet(tuple(x[1] for x in to_sort)).canonicalize()
+            breakpoint()
+            if len(memtile_transform.strides) > 1:
+                memtile_transform = memtile_transform.legalize()
+                assert len(memtile_transform.strides) == num_transform_dimensions_memtile_in
+                fromstream = BDDimLayoutArrayArrayAttr(
+                    BDDimLayoutArrayArray(
+                        [
+                            BDDimLayoutArray(
+                                [BDDimLayout((var.size, var.stride)) for var in memtile_transform.strides[::-1]]
+                            )
+                        ]
+                    )
+                )
+                fifo.dimensionsFromStreamPerConsumer = fromstream
 
         for i, (spatial_offset, stride_set) in enumerate(stride_dict.items()):
             hardware_strides = stride_set.strides[:4]
@@ -1794,10 +1873,11 @@ class OrderDMAs(RewritePattern):
     @op_type_rewrite_pattern
     def match_and_rewrite(self, op: RuntimeSequenceOp, rewriter: PatternRewriter) -> None:
         dma_ops = [op for op in op.body.block.ops if isinstance(op, DmaConfigureTaskForOp)]
-        dma_ops = sorted(dma_ops, key=lambda op: op.attributes['iteration_t'].value.data)
+        dma_ops = sorted(dma_ops, key=lambda op: op.attributes["iteration_t"].value.data)
         for dma_op in dma_ops:
             dma_op.detach()
         rewriter.insert_op(dma_ops, InsertPoint.at_start(op.body.block))
+
 
 @dataclass
 class SyncDMAs(RewritePattern):
