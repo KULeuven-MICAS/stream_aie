@@ -1,5 +1,6 @@
 import math
 import os
+import yaml
 from collections import defaultdict
 from math import ceil, prod
 from typing import Any, TypeAlias
@@ -876,6 +877,7 @@ class TransferAndTensorAllocator:
         self.idleS: dict[tuple[Resource, int], gp.Var] = {}
         self.idleE: dict[tuple[Resource, int], gp.Var] = {}
         self._init_link_idle_indicators(max_s, big_m)
+        self._init_core_idle_indicators(max_s, big_m)
 
     def _init_link_idle_indicators(self, max_s: int, big_m: int) -> None:
         self.link_used: dict[CommunicationLink, gp.Var] = {}
@@ -914,6 +916,56 @@ class TransferAndTensorAllocator:
                 ie_ = self.model.addVar(vtype=GRB.BINARY, name=f"idleE_{_resource_key(link)}_{s}")
                 self.idleS[(link, s)] = is_
                 self.idleE[(link, s)] = ie_
+
+                self.model.addConstr(prefix[s] <= big_m * (1 - is_))
+                self.model.addConstr(prefix[s] >= lu - big_m * is_)
+                self.model.addConstr(suffix[s] <= big_m * (1 - ie_))
+                self.model.addConstr(suffix[s] >= lu - big_m * ie_)
+                self.model.addConstr(is_ >= 1 - lu)
+                self.model.addConstr(ie_ <= lu)
+
+    def _init_core_idle_indicators(self, max_s: int, big_m: int) -> None:
+        # Collect the set of all compute cores from the (fixed) mapping
+        core_set: set[Core] = set()
+        for node in self.ssc_nodes:
+            for group in self.mapping.get(node).resource_allocation:
+                core_set.update(group)
+
+        # Build core → set of slots in which it is active
+        core_active_slots: dict[Core, set[int]] = defaultdict(set)
+        for node in self.ssc_nodes:
+            s = self.slot_of[node]
+            for group in self.mapping.get(node).resource_allocation:
+                for core in group:
+                    core_active_slots[core].add(s)
+
+        for core in core_set:
+            active_slots = core_active_slots[core]
+
+            # active_s[s] is a constant 0/1 for compute cores (mapping is fixed)
+            active_s: dict[int, int] = {s: (1 if s in active_slots else 0) for s in range(max_s + 1)}
+
+            # lu: core is used (always 1 since we only iterate cores from the mapping)
+            lu = self.model.addVar(vtype=GRB.BINARY, name=f"coreUsed_{_resource_key(core)}")
+            self.model.addConstr(lu == 1, name=f"core_used_def_{_resource_key(core)}")
+
+            prefix = [
+                self.model.addVar(vtype=GRB.INTEGER, name=f"pre_{_resource_key(core)}_{s}") for s in range(max_s + 1)
+            ]
+            suffix = [
+                self.model.addVar(vtype=GRB.INTEGER, name=f"suf_{_resource_key(core)}_{s}") for s in range(max_s + 1)
+            ]
+            self.model.addConstr(prefix[0] == active_s[0])
+            self.model.addConstr(suffix[-1] == active_s[max_s])
+            for s in range(1, max_s + 1):
+                self.model.addConstr(prefix[s] == prefix[s - 1] + active_s[s])
+                self.model.addConstr(suffix[max_s - s] == suffix[max_s - s + 1] + active_s[max_s - s])
+
+            for s in range(max_s + 1):
+                is_ = self.model.addVar(vtype=GRB.BINARY, name=f"idleS_{_resource_key(core)}_{s}")
+                ie_ = self.model.addVar(vtype=GRB.BINARY, name=f"idleE_{_resource_key(core)}_{s}")
+                self.idleS[(core, s)] = is_
+                self.idleE[(core, s)] = ie_
 
                 self.model.addConstr(prefix[s] <= big_m * (1 - is_))
                 self.model.addConstr(prefix[s] >= lu - big_m * is_)
@@ -1072,6 +1124,7 @@ class TransferAndTensorAllocator:
         self.plot_optimization_progress(
             show=False, save_path=os.path.join(self.output_path, "optimization_progress.png")
         )
+        self.save_optimization_trace(os.path.join(self.output_path, "optimization_trace.yaml"))
 
         assert self.total_latency is not None, "Total latency variable was not created."
         total_latency = int(self.total_latency.X)
@@ -1597,3 +1650,68 @@ class TransferAndTensorAllocator:
             plt.show()
         else:
             plt.close(fig)
+
+    def save_optimization_trace(self, file_path: str) -> None:
+        """
+        Save the optimization trace to a YAML file.
+
+        Writes a single chronological ``trace`` list. Each entry represents a
+        point where something changed and has the following fields:
+
+        - ``time_s``     – solver runtime in seconds
+        - ``event``      – ``"MIPSOL"`` (new incumbent found) or ``"MIP"`` (bound update)
+        - ``incumbent``  – present only on ``MIPSOL`` entries (when best_obj improved)
+        - ``best_bound`` – present only when the bound changed
+        - ``gap``        – relative gap at this point (when both values are available)
+
+        Args:
+            file_path: Destination path for the YAML file (e.g. "trace.yaml").
+        """
+        if not hasattr(self, "optimization_trace") or not self.optimization_trace:
+            raise ValueError("No optimization trace found. Run solve() with the progress callback enabled first.")
+
+        def _fin(x) -> bool:
+            return x is not None and isinstance(x, int | float) and math.isfinite(x)
+
+        # Sort by time, MIPSOL first when times are equal (mirrors plot logic)
+        sorted_trace = sorted(
+            self.optimization_trace,
+            key=lambda r: (float(r["time"]), 0 if r.get("event") == "MIPSOL" else 1),
+        )
+
+        entries: list[dict] = []
+        last_obj: float | None = None
+        last_bound: float | None = None
+
+        for rec in sorted_trace:
+            if not _fin(rec.get("time")):
+                continue
+
+            t = float(rec["time"])
+            obj = float(rec["best_obj"]) if _fin(rec.get("best_obj")) else None
+            bnd = float(rec["best_bound"]) if _fin(rec.get("best_bound")) else None
+            gap = float(rec["gap"]) if _fin(rec.get("gap")) else None
+
+            incumbent_improved = obj is not None and obj != last_obj
+            bound_changed = bnd is not None and bnd != last_bound
+
+            if not incumbent_improved and not bound_changed:
+                continue
+
+            entry: dict = {"time_s": t, "event": rec.get("event", "MIP")}
+            if incumbent_improved:
+                entry["incumbent"] = obj
+                last_obj = obj
+            if bound_changed:
+                entry["best_bound"] = bnd
+                last_bound = bnd
+            if gap is not None:
+                entry["gap"] = gap
+
+            entries.append(entry)
+
+        os.makedirs(os.path.dirname(os.path.abspath(file_path)), exist_ok=True)
+        with open(file_path, "w") as f:
+            yaml.dump({"trace": entries}, f, default_flow_style=False, sort_keys=False)
+
+        print(f"Optimization trace saved to {file_path}")
