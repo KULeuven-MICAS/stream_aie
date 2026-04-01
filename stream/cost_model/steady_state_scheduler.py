@@ -148,20 +148,21 @@ class SteadyStateScheduler:
             latency_per_iteration,
             overlap,
         )
-        self.tensor_depths = tensor_depths
-        # Export Perfetto-compatible JSON trace of the solved schedule
-        # try:
-        trace_path = export_steady_state_trace(
-            tta=tta,
-            iterations=self.iterations,
-            overlap=overlap,
-            latency_per_iteration=latency_per_iteration,
-            output_path=self.output_path,
-            transfer_allocations=transfer_allocations,
-        )
-        logger.info("Steady-state schedule trace: %s", trace_path)
-        # except Exception as exc:  # never let a visualisation failure abort the run
-        #     logger.warning("Failed to export steady-state trace: %s", exc)
+        # Export Perfetto-compatible JSON traces of the solved schedule
+        for compact, fname in [(False, "steady_state_trace.json"), (True, "steady_state_trace_compact.json")]:
+            try:
+                trace_path = export_steady_state_trace(
+                    tta=tta,
+                    iterations=self.iterations,
+                    overlap=overlap,
+                    latency_per_iteration=latency_per_iteration,
+                    output_path=self.output_path,
+                    compact=compact,
+                    filename=fname,
+                )
+                logger.info("Steady-state schedule trace: %s", trace_path)
+            except Exception as exc:  # never let a visualisation failure abort the run
+                logger.warning("Failed to export steady-state trace (%s): %s", fname, exc)
         # Check that all nodes in the steady state workload have a chosen resource allocation
         # self.check_steady_state_workload_allocations(self.ssw)
         self.update_tensor_steady_state_iteration_spaces(tensor_reuse_levels)
@@ -578,7 +579,7 @@ class SteadyStateScheduler:
 
     def determine_possible_inter_core_tiling(
         self, node: TransferNode, possible_dst_allocs: tuple[tuple[Core, ...], ...], dsts: tuple[HasInputs, ...]
-    ) -> tuple[tuple[int, ...], ...]:
+    ) -> tuple[InterCoreTiling, ...]:
         possible_inter_core_tiling = []
         for dst_allocs in possible_dst_allocs:
             nb_cores = len(dst_allocs)
@@ -596,7 +597,7 @@ class SteadyStateScheduler:
 
     def get_inter_core_tiling_for_compute_to_mem(
         self, node: TransferNode, memory_allocs: tuple[tuple[Core, ...], ...]
-    ) -> tuple[tuple[int, ...], ...]:
+    ) -> tuple[InterCoreTiling, ...]:
         assert isinstance(node, TransferNode), "Node must be a TransferNode for inter-core tiling determination."
         assert node.transfer_type in (TransferType.COMPUTE_TO_MEM,), (
             "This function should only be called for compute to mem transfers."
@@ -611,11 +612,21 @@ class SteadyStateScheduler:
         node_tiling = self.get_matching_tiling(src_compute_tiling, memory_allocs)
         return (node_tiling,)
 
-    def get_matching_tiling(self, compute_tiling: InterCoreTiling, dst_allocs: tuple[Core, ...]) -> tuple[int, ...]:
+    def get_matching_tiling(
+        self, compute_tiling: InterCoreTiling, dst_allocs: tuple[Core, ...]
+    ) -> tuple[LayerDim, int]:
         for tiling_loop in compute_tiling:
             _, size = tiling_loop
             if size == len(dst_allocs):
                 return tiling_loop
+        # If no exact match is found, consider the first loop that has:
+        # - size greater than the number of dst allocs (as we can always split a loop into smaller loops)
+        # - size that is a multiple of the number of dst allocs (as we can split the loop into equal parts)
+        for tiling_loop in compute_tiling:
+            dim, size = tiling_loop
+            if size > len(dst_allocs) and size % len(dst_allocs) == 0:
+                updated_tiling: InterCoreTiling = (dim, size // len(dst_allocs))
+                return updated_tiling
         raise ValueError(f"No matching tiling found for compute tiling {compute_tiling} and dst allocs {dst_allocs}")
 
     def determine_possible_transfer_plans(

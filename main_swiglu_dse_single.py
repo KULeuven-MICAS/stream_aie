@@ -3,7 +3,7 @@ import logging as _logging
 import os
 import re
 
-from stream.api import optimize_mapping
+from stream.api import optimize_allocation_co
 from stream.inputs.aie.workload.make_onnx_swiglu import make_swiglu_workload
 
 _logging_level = _logging.INFO
@@ -31,6 +31,7 @@ def run_main_aie_codegen_swiglu(  # noqa: PLR0913
     workload_path = make_swiglu_workload(
         seq_len, embedding_dim, hidden_dim, in_dtype, out_dtype, last_gemm_down=last_gemm_down
     )
+    mapping_path = "swiglu_256_2048_2048_mapping_20260401_49.yaml"
     ##############################################################################################
 
     ################################PARSING###############################
@@ -39,7 +40,7 @@ def run_main_aie_codegen_swiglu(  # noqa: PLR0913
     if wl_name == "onnx":
         wl_name = re.split(r"/|\.", workload_path)[-2]
     mapping_name = f"{rows}_row_{cols}_col"
-    experiment_id = f"dse-20260401-tilesizes-{seq_len_tile_size}_{embedding_tile_size}_{hidden_tile_size}-{hw_name}-{wl_name}-{mapping_name}"
+    experiment_id = f"dse-single-{hw_name}-{wl_name}-{mapping_name}"
     ######################################################################
 
     ################################LOGGING###############################
@@ -67,9 +68,10 @@ def run_main_aie_codegen_swiglu(  # noqa: PLR0913
     # json_path = f"outputs/{experiment_id}/scme.json"
     #####################################################################
 
-    ctx = optimize_mapping(
+    ctx = optimize_allocation_co(
         hardware=accelerator,
         workload=workload_path,
+        mapping=mapping_path,
         experiment_id=experiment_id,
         output_path="outputs",
         skip_if_exists=False,
@@ -77,12 +79,6 @@ def run_main_aie_codegen_swiglu(  # noqa: PLR0913
         trace_size=trace_size,
         nb_cols_to_use=cols,
         npu=npu,
-        seq_len_tile_size=seq_len_tile_size,
-        embedding_tile_size=embedding_tile_size,
-        hidden_tile_size=hidden_tile_size,
-        last_gemm_down=last_gemm_down,
-        nb_workers=1,
-        max_nb_mappings=100,
     )
 
     # #####################CostModelEvaluationLUT LOAD#############################
@@ -116,12 +112,12 @@ if __name__ == "__main__":
     parser.add_argument("--cols", type=int, default=8, help="Number of AIE columns to use (default: 8)")
     parser.add_argument("--npu", type=str, default="npu2", help="NPU type to target (default: npu2)")
     parser.add_argument(
-        "--seq_len_tile_size", type=int, default=32, help="Tile size for seq_len dimension (default: 64)"
+        "--seq_len_tile_size", type=int, default=32, help="Tile size for seq_len dimension (default: 32)"
     )
     parser.add_argument(
-        "--embedding_tile_size", type=int, default=32, help="Tile size for embedding dimension (default: 64)"
+        "--embedding_tile_size", type=int, default=128, help="Tile size for embedding dimension (default: 128)"
     )
-    parser.add_argument("--hidden_tile_size", type=int, default=32, help="Tile size for hidden dimension (default: 64)")
+    parser.add_argument("--hidden_tile_size", type=int, default=64, help="Tile size for hidden dimension (default: 64)")
     parser.add_argument(
         "--no_last_gemm_down",
         dest="last_gemm_down",
