@@ -112,6 +112,7 @@ class MappingValidator:
         )
 
         for layer_data in self.normalized["layers"]:
+            self._normalize_core_allocation(layer_data)
             self._normalize_inter_core_tiling(layer_data)
             self.add_defaults(layer_data)
 
@@ -157,17 +158,30 @@ class MappingValidator:
             return {"layers": [], "fused_groups": []}
         return data
 
+    def _normalize_core_allocation(self, layer_data: dict[str, Any]) -> None:
+        raw_entries = layer_data.get("core_allocation", []) or []
+        if not raw_entries:
+            return
+        # Legacy flat format: list of ints -> wrap in a single-element outer list
+        # New nested format: list of lists of ints -> keep as-is
+        if raw_entries and not isinstance(raw_entries[0], list):
+            layer_data["core_allocation"] = [raw_entries]
+
     def _normalize_inter_core_tiling(self, layer_data: dict[str, Any]) -> None:
         raw_entries = layer_data.get("inter_core_tiling", []) or []
         normalized_entries: list[dict[str, Any]] = []
         for entry in raw_entries:
             if isinstance(entry, list):
+                # New nested format: each entry is a list of {dim, split} dicts
                 for sub_entry in entry:
                     if not isinstance(sub_entry, dict):
                         self.invalidate(
                             f"Invalid inter_core_tiling entry type: {type(sub_entry)}. Expected dict.",
                         )
                 normalized_entries.append(entry)
+            elif isinstance(entry, dict):
+                # Legacy flat format: wrap each dict in a single-element list
+                normalized_entries.append([entry])
             else:
                 self.invalidate(f"Invalid inter_core_tiling entry type: {type(entry)}")
         layer_data["inter_core_tiling"] = normalized_entries
