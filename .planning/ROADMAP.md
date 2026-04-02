@@ -43,7 +43,10 @@ Plans:
   2. For each (unique workload dimension, candidate tile) pair, TileSizeLUT holds precomputed tensor sizes, SSIS loop sizes, reuse levels, and transfer latencies as Python scalars
   3. Candidates that are not divisors of their workload dimension or that exceed core memory capacity are excluded before any Gurobi variable is created
   4. TileSizeLUT unit tests pass independently with no Gurobi dependency
-**Plans**: TBD
+**Plans**: 2 plans
+Plans:
+- [ ] 02-01-PLAN.md — SearchSpace/TileSizeOption data model, tile_size_utils.py utility functions, unit tests
+- [ ] 02-02-PLAN.md — Thread tile_options_raw through MappingParserStage, CandidateFilterStage, wire into api.py
 
 ### Phase 3: Tile Selection Variables + Memory Constraints
 **Goal**: The CO model contains binary w[dim,k] tile selection variables with one-hot constraints, and memory capacity constraints use LUT-derived linear expressions with tight per-constraint big-M bounds
@@ -97,7 +100,7 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Baseline Validation | 0/2 | Planning complete | - |
-| 2. TileSizeLUT Infrastructure | 0/? | Not started | - |
+| 2. TileSizeLUT Infrastructure | 0/2 | Planning complete | - |
 | 3. Tile Selection Variables + Memory Constraints | 0/? | Not started | - |
 | 4. Variable SSIS + FIFO Constraints | 0/? | Not started | - |
 | 5. Variable Transfer Latency | 0/? | Not started | - |
