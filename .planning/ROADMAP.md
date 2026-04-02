@@ -31,7 +31,7 @@ Decimal phases appear between their surrounding integers in numeric order.
   3. The regression test passes when run against the unmodified fixed-tile pipeline
 **Plans**: 2 plans
 Plans:
-- [ ] 01-01-PLAN.md — tile_options schema support, make_swiglu_mapping_v2, main_swiglu_v2.py entry point, pytest setup
+- [x] 01-01-PLAN.md — tile_options schema support, make_swiglu_mapping_v2, main_swiglu_v2.py entry point, pytest setup
 - [ ] 01-02-PLAN.md — Generate baseline fixture from BIG BOY CO run, create regression test suite
 
 ### Phase 2: TileSizeLUT Infrastructure

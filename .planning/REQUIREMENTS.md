@@ -9,7 +9,7 @@ Requirements for variable tile size optimization milestone. Each maps to roadmap
 
 ### Baseline & Testing
 
-- [ ] **BASE-01**: New main entry file (main_swiglu_v2.py) runs the existing fixed-tile pipeline end-to-end with BIG BOY config (256x2048x8192, tiles 16/128/32)
+- [x] **BASE-01**: New main entry file (main_swiglu_v2.py) runs the existing fixed-tile pipeline end-to-end with BIG BOY config (256x2048x8192, tiles 16/128/32)
 - [ ] **BASE-02**: Regression test captures baseline CO objective value, z_stop assignments, and fire counts for BIG BOY fixed-tile config
 
 ### Tile Size Infrastructure
@@ -58,7 +58,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| BASE-01 | Phase 1 | Pending |
+| BASE-01 | Phase 1 | Complete |
 | BASE-02 | Phase 1 | Pending |
 | TILE-01 | Phase 2 | Pending |
 | TILE-02 | Phase 2 | Pending |
