@@ -157,6 +157,8 @@ docs/make.bat
 
 # json files (for perfetto)
 *.json
+# Exception: regression test fixtures are checked in
+!tests/regression/fixtures/*.json
 
 # auto-generated mlir files
 *.mlir

@@ -1,0 +1,346 @@
+{
+  "latency_total": 922357343,
+  "latency_per_iteration": 10716,
+  "overlap": 3679,
+  "fire_counts": {
+    "Transfer(input)": 64,
+    "Transfer(input_1)": 8192,
+    "Transfer(weights_1)": 2048,
+    "Transfer(weights_1_1)": 8192,
+    "Transfer(left)": 8192,
+    "Transfer(left_swished)": 512,
+    "Transfer(weights_2)": 2048,
+    "Transfer(weights_2_1)": 8192,
+    "Transfer(right)": 8192,
+    "Transfer(intermediate)": 8192,
+    "Transfer(weights_3)": 2048,
+    "Transfer(weights_3_1)": 8192,
+    "Transfer(output_1)": 8192,
+    "Transfer(output_2)": 64
+  },
+  "z_stop": {
+    "Transfer(input)__out0": {
+      "reuse_factor": 1,
+      "loops": [
+        {
+          "dim": "z0",
+          "size": 16,
+          "relevant": true,
+          "reuse": "Reuse"
+        },
+        {
+          "dim": "z2",
+          "size": 4,
+          "relevant": true,
+          "reuse": "Reuse"
+        }
+      ]
+    },
+    "Transfer(input_1)__out0": {
+      "reuse_factor": 1,
+      "loops": [
+        {
+          "dim": "z0",
+          "size": 16,
+          "relevant": true,
+          "reuse": "No Reuse"
+        },
+        {
+          "dim": "z1",
+          "size": 128,
+          "relevant": false,
+          "reuse": "No Reuse"
+        },
+        {
+          "dim": "z2",
+          "size": 4,
+          "relevant": true,
+          "reuse": "No Reuse"
+        }
+      ]
+    },
+    "Transfer(input_1)__out1": {
+      "reuse_factor": 1,
+      "loops": [
+        {
+          "dim": "z0",
+          "size": 16,
+          "relevant": true,
+          "reuse": "No Reuse"
+        },
+        {
+          "dim": "z1",
+          "size": 128,
+          "relevant": false,
+          "reuse": "No Reuse"
+        },
+        {
+          "dim": "z2",
+          "size": 4,
+          "relevant": true,
+          "reuse": "No Reuse"
+        }
+      ]
+    },
+    "Transfer(weights_1)__out0": {
+      "reuse_factor": 1,
+      "loops": [
+        {
+          "dim": "z0",
+          "size": 16,
+          "relevant": true,
+          "reuse": "Reuse"
+        },
+        {
+          "dim": "z1",
+          "size": 128,
+          "relevant": true,
+          "reuse": "Reuse"
+        }
+      ]
+    },
+    "Transfer(weights_1_1)__out0": {
+      "reuse_factor": 1,
+      "loops": [
+        {
+          "dim": "z0",
+          "size": 16,
+          "relevant": true,
+          "reuse": "No Reuse"
+        },
+        {
+          "dim": "z1",
+          "size": 128,
+          "relevant": true,
+          "reuse": "No Reuse"
+        },
+        {
+          "dim": "z2",
+          "size": 4,
+          "relevant": false,
+          "reuse": "No Reuse"
+        }
+      ]
+    },
+    "Transfer(left)__out0": {
+      "reuse_factor": 16,
+      "loops": [
+        {
+          "dim": "z0",
+          "size": 16,
+          "relevant": false,
+          "reuse": "Reuse"
+        },
+        {
+          "dim": "z1",
+          "size": 128,
+          "relevant": true,
+          "reuse": "No Reuse"
+        },
+        {
+          "dim": "z2",
+          "size": 4,
+          "relevant": true,
+          "reuse": "No Reuse"
+        }
+      ]
+    },
+    "Transfer(left_swished)__out0": {
+      "reuse_factor": 1,
+      "loops": [
+        {
+          "dim": "z1",
+          "size": 128,
+          "relevant": true,
+          "reuse": "No Reuse"
+        },
+        {
+          "dim": "z2",
+          "size": 4,
+          "relevant": true,
+          "reuse": "No Reuse"
+        }
+      ]
+    },
+    "Transfer(weights_2)__out0": {
+      "reuse_factor": 1,
+      "loops": [
+        {
+          "dim": "z0",
+          "size": 16,
+          "relevant": true,
+          "reuse": "Reuse"
+        },
+        {
+          "dim": "z1",
+          "size": 128,
+          "relevant": true,
+          "reuse": "Reuse"
+        }
+      ]
+    },
+    "Transfer(weights_2_1)__out0": {
+      "reuse_factor": 1,
+      "loops": [
+        {
+          "dim": "z0",
+          "size": 16,
+          "relevant": true,
+          "reuse": "No Reuse"
+        },
+        {
+          "dim": "z1",
+          "size": 128,
+          "relevant": true,
+          "reuse": "No Reuse"
+        },
+        {
+          "dim": "z2",
+          "size": 4,
+          "relevant": false,
+          "reuse": "No Reuse"
+        }
+      ]
+    },
+    "Transfer(right)__out0": {
+      "reuse_factor": 16,
+      "loops": [
+        {
+          "dim": "z0",
+          "size": 16,
+          "relevant": false,
+          "reuse": "Reuse"
+        },
+        {
+          "dim": "z1",
+          "size": 128,
+          "relevant": true,
+          "reuse": "No Reuse"
+        },
+        {
+          "dim": "z2",
+          "size": 4,
+          "relevant": true,
+          "reuse": "No Reuse"
+        }
+      ]
+    },
+    "Transfer(intermediate)__out0": {
+      "reuse_factor": 16,
+      "loops": [
+        {
+          "dim": "z3",
+          "size": 16,
+          "relevant": false,
+          "reuse": "Reuse"
+        },
+        {
+          "dim": "z1",
+          "size": 128,
+          "relevant": true,
+          "reuse": "No Reuse"
+        },
+        {
+          "dim": "z2",
+          "size": 4,
+          "relevant": true,
+          "reuse": "No Reuse"
+        }
+      ]
+    },
+    "Transfer(weights_3)__out0": {
+      "reuse_factor": 1,
+      "loops": [
+        {
+          "dim": "z3",
+          "size": 16,
+          "relevant": true,
+          "reuse": "Reuse"
+        },
+        {
+          "dim": "z1",
+          "size": 128,
+          "relevant": true,
+          "reuse": "Reuse"
+        }
+      ]
+    },
+    "Transfer(weights_3_1)__out0": {
+      "reuse_factor": 1,
+      "loops": [
+        {
+          "dim": "z3",
+          "size": 16,
+          "relevant": true,
+          "reuse": "No Reuse"
+        },
+        {
+          "dim": "z1",
+          "size": 128,
+          "relevant": true,
+          "reuse": "No Reuse"
+        },
+        {
+          "dim": "z2",
+          "size": 4,
+          "relevant": false,
+          "reuse": "No Reuse"
+        }
+      ]
+    },
+    "Transfer(output_1)__out0": {
+      "reuse_factor": 1,
+      "loops": [
+        {
+          "dim": "z3",
+          "size": 16,
+          "relevant": true,
+          "reuse": "Reuse"
+        },
+        {
+          "dim": "z1",
+          "size": 128,
+          "relevant": false,
+          "reuse": "No Reuse"
+        },
+        {
+          "dim": "z2",
+          "size": 4,
+          "relevant": true,
+          "reuse": "No Reuse"
+        }
+      ]
+    },
+    "Transfer(output_2)__out0": {
+      "reuse_factor": 1,
+      "loops": [
+        {
+          "dim": "z3",
+          "size": 16,
+          "relevant": true,
+          "reuse": "Reuse"
+        },
+        {
+          "dim": "z2",
+          "size": 4,
+          "relevant": true,
+          "reuse": "Reuse"
+        }
+      ]
+    }
+  },
+  "config": {
+    "seq_len": 256,
+    "embedding_dim": 2048,
+    "hidden_dim": 8192,
+    "seq_len_tile_options": [
+      16
+    ],
+    "embedding_tile_options": [
+      128
+    ],
+    "hidden_tile_options": [
+      32
+    ]
+  }
+}

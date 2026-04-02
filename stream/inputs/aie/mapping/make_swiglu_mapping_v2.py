@@ -40,7 +40,7 @@ def make_swiglu_mapping_v2(
 
     # Kernel selection based on seq_len tile size (matvec for seq_len_tile_size==1, gemm otherwise)
     if seq_len_tile_size == 1:
-        kernel_gemm = {"name": "matvec", "kwargs": {"utilization": 61.8}}
+        kernel_gemm = {"name": "matvec", "kwargs": {"utilization": 61.8, "layout": "default"}}
     else:
         kernel_gemm = {
             "name": "gemm",
@@ -49,12 +49,17 @@ def make_swiglu_mapping_v2(
                 "k": embedding_tile_size,
                 "n": hidden_tile_size,
                 "utilization": 61.8,
+                "layout": "default",
             },
         }
 
     # Left Gemm
-    inter_core_tiling_gemm_left = [{"dim": "D2", "split": 2}, {"dim": "D0", "split": 4}]
-    compute_allocation_gemm_left = [2, 3, 4, 5, 8, 9, 10, 11]
+    inter_core_tiling_gemm_left = [
+        [{"dim": "D0", "split": 4}, {"dim": "D2", "split": 2}],
+    ]
+    compute_allocation_gemm_left = [
+        [2, 3, 4, 5, 8, 9, 10, 11],
+    ]
     gemm_left = {
         "name": "Gemm_Left",
         "core_allocation": copy.deepcopy(compute_allocation_gemm_left),
@@ -63,8 +68,12 @@ def make_swiglu_mapping_v2(
     }
 
     # Right Gemm
-    inter_core_tiling_gemm_right = [{"dim": "D2", "split": 2}, {"dim": "D0", "split": 4}]
-    compute_allocation_gemm_right = [14, 15, 16, 17, 20, 21, 22, 23]
+    inter_core_tiling_gemm_right = [
+        [{"dim": "D0", "split": 4}, {"dim": "D2", "split": 2}],
+    ]
+    compute_allocation_gemm_right = [
+        [14, 15, 16, 17, 20, 21, 22, 23],
+    ]
     gemm_right = {
         "name": "Gemm_Right",
         "core_allocation": copy.deepcopy(compute_allocation_gemm_right),
@@ -73,9 +82,13 @@ def make_swiglu_mapping_v2(
     }
 
     # SiLU
-    compute_allocation_silu = [26, 27, 28, 29]
-    inter_core_tiling_silu = [{"dim": "D0", "split": 4}]
-    kernel_silu = {"name": "silu", "kwargs": {"utilization": 50.0}}
+    compute_allocation_silu = [
+        [26, 27, 28, 29],
+    ]
+    inter_core_tiling_silu = [
+        [{"dim": "D0", "split": 4}],
+    ]
+    kernel_silu = {"name": "silu", "kwargs": {"utilization": 50.0, "layout": "default"}}
     silu = {
         "name": "Silu",
         "core_allocation": copy.deepcopy(compute_allocation_silu),
@@ -84,9 +97,13 @@ def make_swiglu_mapping_v2(
     }
 
     # Elementwise Mul
-    compute_allocation_mul = [32, 33, 34, 35]
-    inter_core_tiling_mul = [{"dim": "D0", "split": 4}]
-    kernel_mul = {"name": "eltwise_mul", "kwargs": {"utilization": 50.0}}
+    compute_allocation_mul = [
+        [32, 33, 34, 35],
+    ]
+    inter_core_tiling_mul = [
+        [{"dim": "D0", "split": 4}],
+    ]
+    kernel_mul = {"name": "eltwise_mul", "kwargs": {"utilization": 50.0, "layout": "default"}}
     mul = {
         "name": "Elt_Mul",
         "core_allocation": copy.deepcopy(compute_allocation_mul),
@@ -94,15 +111,32 @@ def make_swiglu_mapping_v2(
         "kernel": copy.deepcopy(kernel_mul),
     }
 
-    # Final down projection Gemm
+    # Final down projection Gemm (k and n are reversed: k=hidden, n=embedding)
     if last_gemm_down:
-        inter_core_tiling_gemm_down = [{"dim": "D1", "split": 2}, {"dim": "D0", "split": 4}]
-        compute_allocation_gemm_down = [38, 39, 40, 41, 44, 45, 46, 47]
+        inter_core_tiling_gemm_down = [
+            [{"dim": "D0", "split": 4}, {"dim": "D1", "split": 2}],
+        ]
+        compute_allocation_gemm_down = [
+            [38, 39, 40, 41, 44, 45, 46, 47],
+        ]
+        if seq_len_tile_size == 1:
+            kernel_gemm_down = {"name": "matvec", "kwargs": {"utilization": 61.8, "layout": "default"}}
+        else:
+            kernel_gemm_down = {
+                "name": "gemm",
+                "kwargs": {
+                    "m": seq_len_tile_size,
+                    "k": hidden_tile_size,
+                    "n": embedding_tile_size,
+                    "utilization": 61.8,
+                    "layout": "default",
+                },
+            }
         gemm_down = {
             "name": "Gemm_Down",
             "core_allocation": copy.deepcopy(compute_allocation_gemm_down),
             "inter_core_tiling": copy.deepcopy(inter_core_tiling_gemm_down),
-            "kernel": copy.deepcopy(kernel_gemm),
+            "kernel": copy.deepcopy(kernel_gemm_down),
         }
         layers = [gemm_left, gemm_right, silu, mul, gemm_down]
         runtime_args = {
