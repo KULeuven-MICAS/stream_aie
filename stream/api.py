@@ -14,6 +14,7 @@ from stream.stages.allocation.genetic_algorithm_allocation import GeneticAlgorit
 from stream.stages.context import StageContext
 from stream.stages.estimation.core_cost_estimation import CoreCostEstimationStage
 from stream.stages.estimation.memory_accesses_estimation import MemoryAccessesEstimationStage
+from stream.stages.generation.candidate_filter_stage import CandidateFilterStage
 
 # from stream.stages.generation.layer_stacks_generation import LayerStacksGenerationStage
 # from stream.stages.generation.scheduling_order_generation import SchedulingOrderGenerationStage
@@ -170,6 +171,7 @@ def optimize_allocation_co(  # noqa: PLR0913
             StreamONNXModelParserStage,  # Parses the ONNX Model into the workload
             MappingParserStage,
             TilingGenerationStage,
+            CandidateFilterStage,  # Filters tile candidates, builds SearchSpace
             CoreCostEstimationStage,
             ConstraintOptimizationAllocationStage,
             MemoryAccessesEstimationStage,

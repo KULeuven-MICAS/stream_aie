@@ -5,7 +5,6 @@ from stream.opt.search_space import SearchSpace, TileSizeOption
 from stream.opt.tile_size_utils import is_divisible_candidate, passes_single_tensor_memory_check
 from stream.stages.context import StageContext
 from stream.stages.stage import Stage, StageCallable
-from stream.workload.workload import ComputationNode
 
 logger = logging.getLogger(__name__)
 
@@ -43,7 +42,6 @@ class CandidateFilterStage(Stage):
             node_name, dim_name = raw_dim_str.split(".")
             dim_idx = int(dim_name[1:])  # "D1" -> 1
             node = self.workload.get_node_by_name(node_name)
-            assert isinstance(node, ComputationNode), f"Node {node_name} is not a ComputationNode."
             unique_dim = self.workload.get_dims(node)[dim_idx]
 
             # Skip if already processed this unique dim (multiple LayerDims may map to same one)
