@@ -22,10 +22,18 @@ class MappingParserStage(Stage):
         self.mapping_parser = MappingParser(mapping_path, self.workload, self.accelerator)
 
     def run(self):
-        mapping = self.mapping_parser.run()
+        mapping_data = self.mapping_parser.parse_mapping_data()
 
-        self.ctx.set(
-            mapping=mapping,
-        )
+        # Extract tile_options before factory discards them
+        tile_options_raw: dict[str, list[int]] = {}
+        for fg in mapping_data.get("fused_groups", []):
+            for entry in fg.get("intra_core_tiling", []) or []:
+                if "tile_options" in entry:
+                    tile_options_raw[entry["dim"]] = entry["tile_options"]
+                elif "tile" in entry:
+                    tile_options_raw[entry["dim"]] = [entry["tile"]]
+
+        mapping = self.mapping_parser.parse_mapping(mapping_data)
+        self.ctx.set(mapping=mapping, tile_options_raw=tile_options_raw)
         sub_stage = self.list_of_callables[0](self.list_of_callables[1:], self.ctx)
         yield from sub_stage.run()
