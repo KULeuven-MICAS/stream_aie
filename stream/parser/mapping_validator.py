@@ -13,16 +13,22 @@ class MappingValidator:
         "name": {"type": "string", "required": True},
         "core_allocation": {
             "type": "list",
-            "schema": {"type": "integer"},
+            "schema": {
+                "type": "list",
+                "schema": {"type": "integer"},
+            },
             "required": True,
         },
         "inter_core_tiling": {
             "type": "list",
             "schema": {
-                "type": "dict",
+                "type": "list",
                 "schema": {
-                    "dim": {"type": "string", "required": True},
-                    "split": {"type": "integer", "required": True},
+                    "type": "dict",
+                    "schema": {
+                        "dim": {"type": "string", "required": True},
+                        "split": {"type": "integer", "required": True},
+                    },
                 },
             },
             "required": False,
@@ -52,7 +58,8 @@ class MappingValidator:
                 "type": "dict",
                 "schema": {
                     "dim": {"type": "string", "required": True},
-                    "tile": {"type": "integer", "required": True},
+                    "tile": {"type": "integer", "required": False},
+                    "tile_options": {"type": "list", "schema": {"type": "integer"}, "required": False},
                 },
             },
             "required": True,
@@ -154,7 +161,12 @@ class MappingValidator:
         raw_entries = layer_data.get("inter_core_tiling", []) or []
         normalized_entries: list[dict[str, Any]] = []
         for entry in raw_entries:
-            if isinstance(entry, dict):
+            if isinstance(entry, list):
+                for sub_entry in entry:
+                    if not isinstance(sub_entry, dict):
+                        self.invalidate(
+                            f"Invalid inter_core_tiling entry type: {type(sub_entry)}. Expected dict.",
+                        )
                 normalized_entries.append(entry)
             else:
                 self.invalidate(f"Invalid inter_core_tiling entry type: {type(entry)}")
@@ -172,18 +184,35 @@ class MappingValidator:
     def _validate_positive_tiling_values(self) -> None:
         for layer_data in self.normalized["layers"]:
             for entry in layer_data.get("inter_core_tiling", []):
-                split_val = entry.get("split", 0)
-                if not isinstance(split_val, int) or split_val <= 0:
-                    self.invalidate(
-                        f"Layer '{layer_data.get('name')}' split must be a positive integer; got {split_val}.",
-                    )
+                for sub_entry in entry:
+                    split_val = sub_entry.get("split", 0)
+                    if not isinstance(split_val, int) or split_val <= 0:
+                        self.invalidate(
+                            f"Layer '{layer_data.get('name')}' split must be a positive integer; got {split_val}.",
+                        )
 
         for fused_group in self.normalized["fused_groups"]:
             for entry in fused_group.get("intra_core_tiling", []) or []:
-                tile_val = entry.get("tile", 0)
-                if not isinstance(tile_val, int) or tile_val <= 0:
+                if "tile_options" in entry:
+                    tile_opts = entry["tile_options"]
+                    if not isinstance(tile_opts, list) or len(tile_opts) == 0:
+                        self.invalidate(
+                            f"Fused group '{fused_group.get('name')}' tile_options must be a non-empty list.",
+                        )
+                    for val in (tile_opts if isinstance(tile_opts, list) else []):
+                        if not isinstance(val, int) or val <= 0:
+                            self.invalidate(
+                                f"Fused group '{fused_group.get('name')}' tile_options values must be positive integers; got {val}.",
+                            )
+                elif "tile" in entry:
+                    tile_val = entry.get("tile", 0)
+                    if not isinstance(tile_val, int) or tile_val <= 0:
+                        self.invalidate(
+                            f"Fused group '{fused_group.get('name')}' tile must be a positive integer; got {tile_val}.",
+                        )
+                else:
                     self.invalidate(
-                        f"Fused group '{fused_group.get('name')}' tile must be a positive integer; got {tile_val}.",
+                        f"Fused group '{fused_group.get('name')}' intra_core_tiling entry must have 'tile' or 'tile_options'.",
                     )
 
     def _validate_fused_group_layer_references(self) -> None:

@@ -22,6 +22,7 @@ from stream.workload.node import (
     OutEdge,
     TransferNode,
 )
+from stream.workload.steady_state.iteration_space import SteadyStateIterationSpace
 from stream.workload.tensor import Tensor
 from stream.workload.utils import affine_bounds, sympy_to_xdsl
 
@@ -122,7 +123,7 @@ class Workload(DiGraphWrapper[Node]):
         return tuple(cast(HasIterationSpace, node) for node in self.nodes if isinstance(node, HasIterationSpace))
 
     def get_node_by_name(self, name: str) -> Node:
-        for node in self.nodes:
+        for node in self.node_list:
             if node.name == name:
                 return node
         raise KeyError(f"No node with name {name} found in workload.")
@@ -182,7 +183,7 @@ class Workload(DiGraphWrapper[Node]):
 
         dim_values = [sympy_to_xdsl(sp.simplify(expr)) for expr in x]
         # IMPORTANT: z dimensions are LayerDim, so expressions.index(LayerDim(i)) works
-        z = [LayerDim(i) for i in range(len(free_vars))]
+        z = [LayerDim(position=i, prefix="z") for i in range(len(free_vars))]
         return z, dim_values
 
     def get_unique_dims_inter_core_tiling(self, node: ComputationNode, mapping: "Mapping") -> InterCoreTiling:
@@ -190,10 +191,15 @@ class Workload(DiGraphWrapper[Node]):
         node_mapping = mapping.get(node)
         assert node_mapping is not None, f"No mapping found for node {node.name}"
         unique_node_dims = self.get_dims(node)
-        converted_tiling: InterCoreTiling = []
-        for dim, factor in node_mapping.inter_core_tiling:
-            dim_idx = dim.position
-            unique_dim = unique_node_dims[dim_idx]
+        converted_tiling: list[InterCoreTiling] = []
+        all_tilings_equal = all(t == node_mapping.inter_core_tiling[0] for t in node_mapping.inter_core_tiling)
+        assert all_tilings_equal, f"Multiple different inter-core tilings for node {node.name} not supported for now."
+        for dim, factor in node_mapping.inter_core_tiling[0]:
+            if "z" in str(dim):
+                unique_dim = dim
+            else:
+                dim_idx = dim.position
+                unique_dim = unique_node_dims[dim_idx]
             converted_tiling.append((unique_dim, factor))
         return converted_tiling
 
@@ -233,18 +239,73 @@ class Workload(DiGraphWrapper[Node]):
         new_shape = self.get_tensor_shape_with_dimension_sizes(tensor, dim_sizes)
         return new_shape
 
-    def get_tensor_shape_of_transfer_to_single_core(
+    def get_tensor_of_transfer_to_single_core(
         self, tensor: Tensor, transfer: TransferNode, mapping: "Mapping"
-    ) -> tuple[int, ...]:
+    ) -> Tensor:
         succ_idx = transfer.outputs.index(tensor)
         succ = list(self.successors(transfer))[succ_idx]
         if isinstance(succ, OutEdge):
             succ_tiling = tuple()
-        else:
-            assert isinstance(succ, ComputationNode), f"Expected ComputationNode, got {type(succ)}"
+        elif isinstance(succ, TransferNode):
+            # Successor transfer node should have same tiling as current transfer since they are on the same core
             succ_tiling = self.get_unique_dims_inter_core_tiling(succ, mapping)
+        elif isinstance(succ, ComputationNode):
+            succ_tiling = self.get_unique_dims_inter_core_tiling(succ, mapping)
+        else:
+            raise TypeError(f"Unexpected successor type {type(succ)} for transfer node {transfer.name}")
         new_shape = self.get_tensor_shape_with_tiling(tensor, succ_tiling)
-        return new_shape
+        new_subview = SubviewOp.from_static_parameters(
+            source=tensor.subview.source,
+            source_type=tensor.subview.source.type,
+            offsets=[0 for _ in new_shape],
+            sizes=new_shape,
+            strides=[1 for _ in new_shape],
+        )
+        return Tensor(
+            name=tensor.name,
+            operand_type=tensor.operand_type,
+            shape=new_shape,
+            subview=new_subview,
+        )
+
+    def get_tensor_of_transfer_from_single_core(
+        self, tensor: Tensor, transfer: TransferNode, mapping: "Mapping"
+    ) -> Tensor:
+        pred_idx = transfer.inputs.index(tensor)
+        pred = list(self.predecessors(transfer))[pred_idx]
+        if isinstance(pred, InEdge):
+            pred_tiling = tuple()
+        else:
+            assert isinstance(pred, ComputationNode), f"Expected ComputationNode, got {type(pred)}"
+            pred_tiling = self.get_unique_dims_inter_core_tiling(pred, mapping)
+        new_shape = self.get_tensor_shape_with_tiling(tensor, pred_tiling)
+        new_subview = SubviewOp.from_static_parameters(
+            source=tensor.subview.source,
+            source_type=tensor.subview.source.type,
+            offsets=[0 for _ in new_shape],
+            sizes=new_shape,
+            strides=[1 for _ in new_shape],
+        )
+        return Tensor(
+            name=tensor.name,
+            operand_type=tensor.operand_type,
+            shape=new_shape,
+            subview=new_subview,
+        )
+
+    def replace_node(self, old_node: Node, new_node: Node) -> None:
+        """Replace a node in the workload with a new node, updating edges accordingly."""
+        if old_node not in self.node_list:
+            try:
+                old_node = self.get_node_by_name(old_node.name)
+            except KeyError as e:
+                raise KeyError(f"Node {old_node.name} not found in workload.") from e
+        self.add_node(new_node)
+        for pred in self.predecessors(old_node):
+            self.add_edge(pred, new_node)
+        for succ in self.successors(old_node):
+            self.add_edge(new_node, succ)
+        self.remove_node(old_node)
 
     def with_modified_dimension_sizes(self, new_sizes: dict[LayerDim, int]) -> "Workload":
         """Create a new workload where the dimension sizes of the given global dimension indices are modified to the new
@@ -359,7 +420,12 @@ class Workload(DiGraphWrapper[Node]):
             result[unique_dim] = stride
         return result
 
-    def visualize(self, filepath: str = "workload_graph.png", mapping: "Mapping | None" = None) -> None:
+    def visualize(
+        self,
+        filepath: str = "workload_graph.png",
+        mapping: "Mapping | None" = None,
+        ssis: dict[Node, "SteadyStateIterationSpace"] | None = None,
+    ) -> None:
         """Visualize the graph using Graphviz and save it to an image file.
 
         Nodes are laid out horizontally by topological generation,
@@ -396,10 +462,10 @@ class Workload(DiGraphWrapper[Node]):
                 dim_sizes = {str(dim): self.get_dimension_size(dim) for dim in self.get_dims(node)}
                 n.set_shape("box")
                 label = f"{node.name}\nType: {node.transfer_type}\nDims: {dim_sizes}"
-                if mapping is not None:
-                    node_mapping = mapping.get(node)
-                    if node_mapping.memory_allocation is not None:
-                        label += f"\nMemAlloc: {node_mapping.memory_allocation}"
+                label += self._get_mem_alloc_label(node, mapping)
+                if ssis:
+                    label += self._get_for_loop_label(ssis.get(node, None))
+
                 n.set_label(label)
                 n.set_style("filled")
                 n.set_fillcolor("#ffcb9a")
@@ -419,6 +485,27 @@ class Workload(DiGraphWrapper[Node]):
         # Save to file
         dot.write_png(filepath)
         print(f"Graph saved to {filepath}")
+
+    def _get_mem_alloc_label(self, node: TransferNode, mapping: "Mapping | None") -> str:
+        if mapping is not None:
+            node_mapping = mapping.get(node)
+            if node_mapping.memory_allocation is not None:
+                return f"\nMemAlloc: {node_mapping.memory_allocation}"
+        return ""
+
+    def _get_for_loop_label(self, ssis: SteadyStateIterationSpace | None) -> str:
+        if ssis is not None:
+            temporal_loop_dims = reversed(ssis.get_temporal_variables())
+            temporal_loop_sizes = reversed(ssis.get_temporal_sizes())
+            reuses = reversed(ssis.get_temporal_reuses())
+            label = "\nForLoops:"
+            indent = ""
+            for dim, size, reuse in zip(temporal_loop_dims, temporal_loop_sizes, reuses, strict=True):
+                label += f"\n{indent}{dim}: {size}; Reuse={reuse}"
+                indent += "  "
+            label += "\n"
+            return f"{label}"
+        return ""
 
     def get_timeslots(self) -> dict[Node, int]:
         timeslots = {}

@@ -1,5 +1,7 @@
+import time
 from collections import defaultdict
 from collections.abc import Iterator, Sequence
+from copy import deepcopy
 from itertools import product
 from math import prod
 from typing import cast
@@ -13,7 +15,7 @@ from xdsl.ir.affine import AffineDimExpr
 from xdsl.parser import AffineMap
 from xdsl_aie.dialects.aie import AIEDeviceEnum
 
-from stream.compiler.dialects.stream import ComputationNodeOp, InEdgeOp, OutEdgeOp, Stream, TransferOp
+from stream.compiler.dialects.stream import ComputationNodeOp, InEdgeOp, LayerDimAttr, OutEdgeOp, Stream, TransferOp
 
 # from stream.compiler.transforms.aie_add_tracing_script import AIEAddTracingScript
 from stream.compiler.transforms.clear_memory_space import ClearMemorySpace
@@ -27,7 +29,7 @@ from stream.stages.context import StageContext
 from stream.stages.stage import Stage, StageCallable
 from stream.workload.steady_state.iteration_space import (
     IterationVariable,
-    MemTileReuse,
+    IterationVariableType,
     SteadyStateIterationSpace,
 )
 from stream.workload.workload import (
@@ -70,7 +72,10 @@ class AIECodeGenerationStage(Stage):
 
         for ctx in sub_stage.run():
             self.ctx = ctx
+            start = time.time()
             self.codegen_main()
+            end = time.time()
+            print(f"code generation took {end - start} seconds")
             assert self.module is not None
             self.ctx.set(module=self.module)
             yield self.ctx
@@ -131,6 +136,13 @@ class AIECodeGenerationStage(Stage):
         ]
         num_spat_results = prod(v.size for v in relevant_spat_vars)
 
+        # Move determination of sizes/strides for runtime compies over to lowering logic,
+        # here, just set sizes and strides to the input layout such that correct calculations can be made.
+        operand_index_dims = [
+            x[0] for x in sorted(workload_strides.items(), key=lambda x: x[1], reverse=True) if any(x[1])
+        ]
+        operand_attr = ArrayAttr([LayerDimAttr(x) for x in operand_index_dims])
+
         # Determine the output type based on this:
         if is_out_transfer:
             result_type = node.outputs[0].subview.source.type
@@ -146,33 +158,65 @@ class AIECodeGenerationStage(Stage):
         transfer_elements = prod(transfer_shape)
         # spatio_temporal_elements = prod(v.size for v in ssis_dest.get_spatio_temporal_variables())
         # spatial_stride = transfer_elements * spatio_temporal_elements
-        # breakpoint()
         if is_out_transfer:
             st_factor = num_spat_results // len(inputs)
+            spatial_strides = tuple(range(0, transfer_elements * num_spat_results, transfer_elements * st_factor))
+        elif len(inputs) == 1:
+            spatial_strides = tuple(range(0, transfer_elements * num_spat_results, transfer_elements))
+        elif num_spat_results == 1:
+            spatial_strides = tuple(range(0, transfer_elements * len(inputs), transfer_elements))
         else:
-            st_factor = 1
-        spatial_strides = tuple(range(0, transfer_elements * num_spat_results, transfer_elements * st_factor))
+            # FIXME: spatial strides can apply to both input and output but it is not very clear right now
+            spatial_strides = tuple(range(0, transfer_elements * num_spat_results, transfer_elements))
+            # raise NotImplementedError("The case with multiple inputs and multiple spatial results is not implemented yet")
 
         # Determine the temporal strides for this transfer:
         seen_dims = defaultdict(lambda: 1)
         # this assumes that each resulting tile after tiling to be in row-major layout
         # this could probably benefit from a more holistic view of layout transformation
+        #
+        if is_out_transfer:
+            ssis_prev = ssis_dict[next(workload.predecessors(node))]
+            new_ssis = []
+            new_ssis_tvars = []
+            for cur, prev in zip(ssis.variables, ssis_prev.variables, strict=True):
+                if cur.type == prev.type:
+                    if cur.type == IterationVariableType.TEMPORAL:
+                        new_ssis_tvars.append(deepcopy(cur))
+                    else:
+                        new_ssis.append(deepcopy(cur))
+                else:
+                    assert cur.type == IterationVariableType.SPATIAL
+                    assert prev.type == IterationVariableType.SPATIOTEMPORAL
+                    new_var = deepcopy(cur)
+                    new_var.type = IterationVariableType.TEMPORAL
+                    new_ssis_tvars.append(new_var)
+            ssis = SteadyStateIterationSpace([*new_ssis, *new_ssis_tvars])
 
         all_vars: Sequence[IterationVariable] = []
-        # First, iterate over kenrel dimensions in row-major order:
+        # First, iterate over kernel dimensions in row-major order:
         kernel_var_dict = {v.dimension: v for v in ssis.get_kernel_variables()}
         filtered_vars = [(dim, strides) for dim, strides in workload_strides.items() if any(strides)]
         ordered_strides = sorted(filtered_vars, key=lambda x: x[1])
         ordered_strides = [ordered_strides[i] for i in index_order]
         all_vars.extend(kernel_var_dict[dim] for dim, _ in ordered_strides)
+
+        # First, we should go over the temporal vars that are kept local in mem tile:
+        reuse_tvars = []
+        for var in ssis.get_temporal_variables():
+            if var.mem_tile_reuse == MemTileReuse.REUSE:
+                reuse_tvars.append(var)
+            else:
+                break
+        non_reuse_tvars = ssis.get_temporal_variables()[len(reuse_tvars) :]
+        all_vars.extend(var for var in reuse_tvars if var.relevant)
         # Then, iterate over relevant spatial vars:
         all_vars.extend(var for var in ssis.get_spatial_variables() if var.relevant)
         # This is only relevant for first and last ops, which should not have spatio-temporal vars.
         # After that, go over the temporal strides (both relevant and irellevant)
         # that aren't kept local in memtiles.
-        all_vars.extend(
-            var for var in ssis.get_temporal_variables() if var.relevant or var.mem_tile_reuse != MemTileReuse.REUSE
-        )
+        # Then, add all remaining temporal variables that aren't kept local in the memtile
+        all_vars.extend(var for var in non_reuse_tvars if var.applicable)
 
         # I dont' think offsets are relevant anymore with the new representation
         offsets = [0]
@@ -192,11 +236,21 @@ class AIECodeGenerationStage(Stage):
 
         sizes, strides = canonicalize_transformation(sizes, strides)
 
-        if isinstance(mapping.memory_allocation, Core):
-            row, col = mapping.memory_allocation.row_id, mapping.memory_allocation.col_id
+        if len(mapping.memory_allocation):
+            row, col = mapping.memory_allocation[0].row_id, mapping.memory_allocation[0].col_id
             assert row is not None
             assert col is not None
-            memtile = ArrayAttr([IntegerAttr.from_index_int_value(x) for x in (col, row)])
+            if is_out_transfer:
+                row = 1
+                col = 7
+                memtile = ArrayAttr(
+                    [
+                        ArrayAttr([IntegerAttr.from_index_int_value(6), IntegerAttr.from_index_int_value(1)]),
+                        ArrayAttr([IntegerAttr.from_index_int_value(7), IntegerAttr.from_index_int_value(1)]),
+                    ]
+                )
+            else:
+                memtile = ArrayAttr([ArrayAttr([IntegerAttr.from_index_int_value(x) for x in (col, row)])])
         else:
             memtile = NoneAttr()
 
@@ -209,6 +263,7 @@ class AIECodeGenerationStage(Stage):
             strides,
             spatial_strides,
             memtile,
+            operand_attr,
         )
 
         return op
@@ -242,9 +297,14 @@ class AIECodeGenerationStage(Stage):
         workload.global_mapping(node, node.operand_mapping[-1])
         # Spatial: (m, 4), (n, 4)
         # step 1: get iterable over all combinations with [(LayerDim, value), (LayerDim, value)] as data
-        ranges = [[(spat_var.dimension, x) for x in range(spat_var.size)] for spat_var in ssis.get_spatial_variables()]
+        ranges = [
+            [(spat_var.dimension, x) for x in range(spat_var.size)]
+            for spat_var in ssis.get_spatial_variables()
+            if spat_var.applicable
+        ]
+
         # step 2:
-        combined_ranges = list(product(*ranges))
+        combined_ranges = list(product(*reversed(ranges)))
         for core, comb_ran in zip(mapping.resource_allocation, combined_ranges, strict=True):
             selected_inputs = []
             for input in inputs:

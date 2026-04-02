@@ -1,8 +1,11 @@
 import string
 from collections import defaultdict
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Iterator, Sequence
+from copy import deepcopy
 from dataclasses import dataclass, field
-from math import prod
+from functools import reduce
+from itertools import product
+from math import isqrt, prod
 from typing import Self, cast
 
 from snaxc.dialects.snax import LayoutCast
@@ -13,11 +16,14 @@ from xdsl.dialects.arith import AddiOp, ConstantOp, MuliOp
 from xdsl.dialects.builtin import (
     ArrayAttr,
     DenseArrayBase,
+    FixedBitwidthType,
     IndexType,
     IntegerAttr,
     IntegerType,
     MemRefType,
     ModuleOp,
+    NoneAttr,
+    ShapedType,
     StringAttr,
     SymbolRefAttr,
     i32,
@@ -71,12 +77,18 @@ from stream.compiler.dialects.stream import (
     OutEdgeOp,
     PullOp,
     PushOp,
+    SteadyStateIterationSpaceAttr,
     TransferOp,
 )
 from stream.compiler.kernels.aie_kernel import AIEKernel
 from stream.compiler.transforms.convert_aie_kernels import ConvertAIEKernels
 from stream.compiler.transforms.iteration_space_to_for import iteration_space_to_for
-from stream.workload.steady_state.iteration_space import ComputeTileReuse
+from stream.workload.steady_state.iteration_space import (
+    IterationVariable,
+    IterationVariableType,
+    Reuse,
+    SteadyStateIterationSpace,
+)
 
 
 def get_of_name(source: TileOp, dest: TileOp, operand: str) -> str:
@@ -126,8 +138,9 @@ class TileOpManager:
             if isinstance(parent, RuntimeSequenceOp):
                 if isinstance(operation, PushOp | PullOp):
                     if isinstance(attr := operation.memtile, ArrayAttr):
-                        memtile_idx = cast(tuple[IntegerAttr[IndexType], ...], attr.data)
-                        return self.insert_or_update(memtile_idx[0].value.data, 0)
+                        if isinstance(attr := attr.data[0], ArrayAttr):
+                            memtile_idx = cast(tuple[IntegerAttr[IndexType], ...], attr.data)
+                            return self.insert_or_update(memtile_idx[0].value.data, 0)
                     return self.insert_or_update(0, 0)
             parent = parent.parent_op()
             if parent is None:
@@ -187,22 +200,22 @@ class ObjectFifoHop:
 
     @classmethod
     def to_memtile(
-        cls, producers: Sequence[PushOp], memtile: TileOp, tile_op_manager: TileOpManager, name_base: str
+        cls, producers: Sequence[PushOp], memtiles: Sequence[TileOp], tile_op_manager: TileOpManager, name_base: str
     ) -> Self:
         # when coming from shim, send to custom handler for memtile reuse
         if is_shim(tile_op_manager.get_tile(producers[0])):
-            return cls.shim_to_mem(producers[0], memtile, tile_op_manager, name_base)
+            return cls.shim_to_mem(producers[0], memtiles, tile_op_manager, name_base)
         else:
-            return cls.compute_to_mem(producers, memtile, tile_op_manager, name_base)
+            return cls.compute_to_mem(producers, memtiles, tile_op_manager, name_base)
 
     @classmethod
     def from_memtile(
-        cls, consumers: Sequence[PullOp], memtile: TileOp, tile_op_manager: TileOpManager, name_base: str
+        cls, consumers: Sequence[PullOp], memtiles: Sequence[TileOp], tile_op_manager: TileOpManager, name_base: str
     ) -> Self:
         if is_shim(tile_op_manager.get_tile(consumers[0])):
-            return cls.mem_to_shim(consumers[0], memtile, tile_op_manager, name_base)
+            return cls.mem_to_shim(consumers[0], memtiles, tile_op_manager, name_base)
         else:
-            return cls.mem_to_compute(consumers, memtile, tile_op_manager, name_base)
+            return cls.mem_to_compute(consumers, memtiles, tile_op_manager, name_base)
 
     @classmethod
     def compute_to_compute(
@@ -231,14 +244,12 @@ class ObjectFifoHop:
             else:
                 of_name = name_base + "_" + of_type
             object_fifo = ObjectFifoOp.from_referenced_type(
-                elemNumber=(producers[0].ssis.data.nb_local_tensors_compute() + cls.DB_EXTRA,)
-                * (1 + len(consumer_tiles)),
+                elemNumber=(producers[0].ssis.data.nb_local_tensors() + cls.DB_EXTRA,) * (1 + len(consumer_tiles)),
                 producerTile=producer_tile,
                 consumerTiles=consumer_tiles,
                 referenced_type=memref_type.get_element_type(),
                 shape=memref_type.get_shape(),
                 name=of_name,
-                repeat_count=producers[0].ssis.data.reuse_factor_compute(),
             )
             assert isinstance(object_fifo.repeat_count, IntegerAttr)
             if object_fifo.repeat_count.value.data == 1:
@@ -248,7 +259,7 @@ class ObjectFifoHop:
 
     @classmethod
     def compute_to_mem(
-        cls, producers: Sequence[PushOp], memtile: TileOp, tile_op_manager: TileOpManager, name_base: str
+        cls, producers: Sequence[PushOp], memtiles: Sequence[TileOp], tile_op_manager: TileOpManager, name_base: str
     ) -> Self:
         assert isinstance(memref_type := producers[0].input.type, MemRefType)
         if len(producers) > 1:
@@ -258,15 +269,29 @@ class ObjectFifoHop:
         producers = sorted(producers, key=lambda op: SortPullPushOp(op, tile_op_manager))
         producer_tiles = [tile_op_manager.get_tile(producer) for producer in producers]
         object_fifos: list[ObjectFifoOp] = []
+
+        def memtile_selector(i: int):
+            if len(memtiles) == 1:
+                return memtiles[0]
+            spat_vars = producers[0].ssis.data.get_spatial_variables()
+            spat_vars = [x for x in spat_vars if x.applicable]
+            used_vars = [var for var in spat_vars if var.size == len(memtiles)]
+            assert len(used_vars) == 1
+            used_var = used_vars[0]
+            other_vars = spat_vars[: spat_vars.index(used_var)]
+            div = prod(x.size for x in other_vars)
+            mod = len(memtiles)
+            return memtiles[(i // div) % mod]
+
         for i, of_producer in enumerate(producer_tiles):
             if len(producers) > 1:
                 of_name = name_base + "_" + of_type + "_" + string.ascii_lowercase[i]
             else:
                 of_name = name_base + "_" + of_type
             object_fifo = ObjectFifoOp.from_referenced_type(
-                elemNumber=(producers[0].ssis.data.nb_local_tensors_compute() + cls.DB_EXTRA,) * 2,
+                elemNumber=(producers[0].ssis.data.nb_local_tensors() + cls.DB_EXTRA,) * 2,
                 producerTile=of_producer,
-                consumerTiles=[memtile],
+                consumerTiles=[memtile_selector(i)],
                 referenced_type=memref_type.get_element_type(),
                 shape=memref_type.get_shape(),
                 name=of_name,
@@ -277,7 +302,7 @@ class ObjectFifoHop:
 
     @classmethod
     def mem_to_compute(  # noqa: PLR0912
-        cls, consumers: Sequence[PullOp], memtile: TileOp, tile_op_manager: TileOpManager, name_base: str
+        cls, consumers: Sequence[PullOp], memtiles: Sequence[TileOp], tile_op_manager: TileOpManager, name_base: str
     ) -> Self:
         assert isinstance(memref_type := consumers[0].output.type, MemRefType)
         unique_consumers = len(set(x.offsets for x in consumers))
@@ -293,24 +318,41 @@ class ObjectFifoHop:
             of_type = "unicast"
         consumers = sorted(consumers, key=lambda op: SortPullPushOp(op, tile_op_manager))
         consumer_tiles = [tile_op_manager.get_tile(consumer) for consumer in consumers]
+
+        def memtile_selector(i: int):
+            if len(memtiles) == 1:
+                return memtiles[0]
+            spat_vars = consumers[0].ssis.data.get_spatial_variables()
+            spat_vars = [x for x in spat_vars if x.applicable]
+            used_vars = [var for var in spat_vars if var.size == len(memtiles)]
+            assert len(used_vars) == 1
+            used_var = used_vars[0]
+            other_vars = spat_vars[spat_vars.index(used_var) + 1 :]
+            div = prod(x.size for x in other_vars)
+            mod = len(memtiles)
+            return memtiles[(i // div) % mod]
+
         if of_type == "distribute":
-            fifos = [(memtile, [tile]) for tile in consumer_tiles]
+            fifos = [(memtile_selector(i), [tile]) for i, tile in enumerate(consumer_tiles)]
         elif of_type == "distribroad":
             # gather unique consumer tiles
             unique_consumer_tiles = defaultdict(list)
             for consumer in consumers:
                 unique_consumer_tiles[consumer.offsets].append(tile_op_manager.get_tile(consumer))
-            fifos = [(memtile, tiles) for tiles in unique_consumer_tiles.values()]
-        else:
-            fifos = [(memtile, consumer_tiles)]
+            fifos = [(memtile_selector(i), tiles) for i, tiles in enumerate(unique_consumer_tiles.values())]
+        else:  # broadcast or unicast
+            assert len(memtiles) == 1
+            fifos = [(memtiles[0], consumer_tiles)]
         object_fifos: list[ObjectFifoOp] = []
+        # FIXME: remove this stupid hardcoded factor:
+        distribroad_factor = 0 if of_type == "distribroad" else 0
         for i, (of_producer, of_consumers) in enumerate(fifos):
             if of_type in ("distribute", "distribroad"):
                 of_name = name_base + "_" + of_type + "_" + string.ascii_lowercase[i]
             else:
                 of_name = name_base + "_" + of_type
             object_fifo = ObjectFifoOp.from_referenced_type(
-                elemNumber=(consumers[0].ssis.data.nb_local_tensors_compute() + cls.DB_EXTRA,)
+                elemNumber=(consumers[0].ssis.data.nb_local_tensors() + cls.DB_EXTRA + distribroad_factor,)
                 * (1 + len(of_consumers)),
                 producerTile=of_producer,
                 consumerTiles=of_consumers,
@@ -326,36 +368,46 @@ class ObjectFifoHop:
         return cls(object_fifos)
 
     @classmethod
-    def shim_to_mem(cls, producer: PushOp, memtile: TileOp, tile_op_manager: TileOpManager, name_base: str) -> Self:
+    def shim_to_mem(
+        cls, producer: PushOp, memtiles: Sequence[TileOp], tile_op_manager: TileOpManager, name_base: str
+    ) -> Self:
         assert isinstance(memref_type := producer.input.type, MemRefType)
-        object_fifo = ObjectFifoOp.from_referenced_type(
-            elemNumber=(1 + cls.DB_EXTRA, 1 + cls.DB_EXTRA),
-            producerTile=tile_op_manager.get_tile(producer),
-            consumerTiles=[memtile],
-            referenced_type=memref_type.get_element_type(),
-            shape=producer.ssis.data.shape_mem(),
-            name=name_base + "mem",
-            repeat_count=1,
-        )
-        del object_fifo.properties["repeat_count"]
-
-        if object_fifo.repeat_count is not None and object_fifo.repeat_count.value.data == 1:
+        fifos = []
+        for i, memtile in enumerate(memtiles):
+            object_fifo = ObjectFifoOp.from_referenced_type(
+                elemNumber=(1 + cls.DB_EXTRA, 1 + cls.DB_EXTRA),
+                producerTile=tile_op_manager.insert_or_update(memtile.col.value.data, 0),
+                consumerTiles=[memtile],
+                referenced_type=memref_type.get_element_type(),
+                shape=producer.ssis.data.shape_mem(),
+                name=name_base + "mem" + "_" + string.ascii_lowercase[i],
+                repeat_count=1,
+            )
             del object_fifo.properties["repeat_count"]
-        return cls([object_fifo])
+
+            if object_fifo.repeat_count is not None and object_fifo.repeat_count.value.data == 1:
+                del object_fifo.properties["repeat_count"]
+            fifos.append(object_fifo)
+        return cls(fifos)
 
     @classmethod
-    def mem_to_shim(cls, consumer: PullOp, memtile: TileOp, tile_op_manager: TileOpManager, name_base: str) -> Self:
+    def mem_to_shim(
+        cls, consumer: PullOp, memtiles: Sequence[TileOp], tile_op_manager: TileOpManager, name_base: str
+    ) -> Self:
         assert isinstance(memref_type := consumer.output.type, MemRefType)
-        object_fifo = ObjectFifoOp.from_referenced_type(
-            elemNumber=(1 + cls.DB_EXTRA, 1 + cls.DB_EXTRA),
-            producerTile=memtile,
-            consumerTiles=[tile_op_manager.get_tile(consumer)],
-            referenced_type=memref_type.get_element_type(),
-            shape=consumer.ssis.data.shape_mem(),
-            name=name_base + "mem",
-        )
-        del object_fifo.properties["repeat_count"]
-        return cls([object_fifo])
+        fifos = []
+        for i, memtile in enumerate(memtiles):
+            object_fifo = ObjectFifoOp.from_referenced_type(
+                elemNumber=(1 + cls.DB_EXTRA, 1 + cls.DB_EXTRA),
+                producerTile=memtile,
+                consumerTiles=[tile_op_manager.insert_or_update(memtile.col.value.data, 0)],
+                referenced_type=memref_type.get_element_type(),
+                shape=consumer.ssis.data.shape_mem(len(memtiles)),
+                name=name_base + "mem" + "_" + string.ascii_lowercase[i],
+            )
+            del object_fifo.properties["repeat_count"]
+            fifos.append(object_fifo)
+        return cls(fifos)
 
 
 @dataclass
@@ -385,12 +437,15 @@ class ObjectFifoChain:
         hops: Sequence[ObjectFifoHop]
         if is_shim(consumer_tiles[0]) or is_shim(producer_tiles[0]):
             # pass through the memtile
-            assert isinstance(attr := producers[0].memtile, ArrayAttr)
-            memtile_idx = cast(tuple[IntegerAttr[IndexType], ...], attr.data)
-            memtile = tile_op_manager.insert_or_update(memtile_idx[0].value.data, memtile_idx[1].value.data)
+            assert isa(attr := producers[0].memtile, ArrayAttr[ArrayAttr[IntegerAttr[IndexType]]])
+            memtile_idxs = [subattr.data for subattr in attr.data]
+            memtiles = [
+                tile_op_manager.insert_or_update(memtile_idx[0].value.data, memtile_idx[1].value.data)
+                for memtile_idx in memtile_idxs
+            ]
             hops = [
-                ObjectFifoHop.to_memtile(producers, memtile, tile_op_manager, name_base),
-                ObjectFifoHop.from_memtile(consumers, memtile, tile_op_manager, name_base),
+                ObjectFifoHop.to_memtile(producers, memtiles, tile_op_manager, name_base),
+                ObjectFifoHop.from_memtile(consumers, memtiles, tile_op_manager, name_base),
             ]
         else:
             hops = [ObjectFifoHop.compute_to_compute(producers, consumers, tile_op_manager, name_base)]
@@ -398,32 +453,50 @@ class ObjectFifoChain:
         # generate links for every hop
         links: Sequence[ObjectFifoLinkOp] = []
         for i in range(len(hops) - 1):
-            link = cls.get_link(hops[i], hops[i + 1])
-            links.append(link)
+            links.extend(cls.get_links(hops[i], hops[i + 1]))
 
         return cls(hops, links)
 
     @staticmethod
-    def get_link(hop_in: ObjectFifoHop, hop_out: ObjectFifoHop) -> ObjectFifoLinkOp:
-        if len(hop_in.fifos) > 1:
+    def get_links(hop_in: ObjectFifoHop, hop_out: ObjectFifoHop) -> Sequence[ObjectFifoLinkOp]:
+        if len(hop_in.fifos) > len(hop_out.fifos):
             # determine src offsets
             assert isinstance(memref_out := hop_out.fifos[0].elemType.buffer, MemRefType)
-            offset = prod(memref_out.get_shape()) // len(hop_in.fifos)
-            src_offsets = [i * offset for i in range(len(hop_in.fifos))]
-        else:
-            src_offsets = []
-        if len(hop_out.fifos) > 1:
+            offset = prod(memref_out.get_shape()) // (len(hop_in.fifos) // len(hop_out.fifos))
+            src_offsets = [i * offset for i in range(len(hop_in.fifos) // len(hop_out.fifos))]
+            return [
+                ObjectFifoLinkOp(
+                    [fifin.sym_name.data for fifin in hop_in.fifos if fifout.producerTile in fifin.consumerTiles],
+                    [fifout.sym_name.data],
+                    src_offsets,
+                    [],
+                )
+                for fifout in hop_out.fifos
+            ]
+        elif len(hop_out.fifos) > len(hop_in.fifos):
             assert isinstance(memref_in := hop_in.fifos[0].elemType.buffer, MemRefType)
-            offset = prod(memref_in.get_shape()) // len(hop_out.fifos)
-            dst_offsets = [i * offset for i in range(len(hop_out.fifos))]
+            offset = prod(memref_in.get_shape()) // (len(hop_out.fifos) // len(hop_in.fifos))
+            dst_offsets = [i * offset for i in range(len(hop_out.fifos) // len(hop_in.fifos))]
+            return [
+                ObjectFifoLinkOp(
+                    [fifin.sym_name.data],
+                    [fifout.sym_name.data for fifout in hop_out.fifos if fifout.producerTile in fifin.consumerTiles],
+                    [],
+                    dst_offsets,
+                )
+                for fifin in hop_in.fifos
+            ]
         else:
-            dst_offsets = []
-        return ObjectFifoLinkOp(
-            [fifo.sym_name.data for fifo in hop_in.fifos],
-            [fifo.sym_name.data for fifo in hop_out.fifos],
-            src_offsets,
-            dst_offsets,
-        )
+            assert len(hop_in.fifos) == 1
+            assert len(hop_out.fifos) == 1
+            return [
+                ObjectFifoLinkOp(
+                    [hop_in.fifos[0].sym_name.data],
+                    [hop_out.fifos[0].sym_name.data],
+                    [],
+                    [],
+                )
+            ]
 
     def get_of(self, op: PullOp | PushOp, tile_op_manager: TileOpManager):
         """
@@ -519,6 +592,11 @@ class ObjectFifoManager:
                 of_name = op.objFifo_name.root_reference.data
                 current_fifo_depth[of_name] -= 1
 
+    def all_acquires(self, of_name: str) -> Iterator[ObjectFifoAcquireOp]:
+        for op in self.device_op.walk():
+            if isinstance(op, ObjectFifoAcquireOp) and op.objFifo_name.string_value() == of_name:
+                yield op
+
 
 def canonicalize_transformation(sizes: Sequence[int], strides: Sequence[int]) -> tuple[list[int], list[int]]:
     """
@@ -600,124 +678,246 @@ class TransferToRuntimeSequence(RewritePattern):
         if isinstance(op, PushOp):
             assert isinstance(op.input, OpResult)
             edge = op.input.op
-            ofs = of_chain.get_of(op, self.object_fifo_manager.tile_op_manager)
-            assert len(ofs) == 1
-            of = ofs[0]
         else:
             edge = next((use.operation for use in op.output.uses), None)
             if edge is None:
                 # TODO: this transfer should not be present anymore
                 rewriter.erase_matched_op()
                 return
-            ofs = of_chain.get_of(op, self.object_fifo_manager.tile_op_manager)
-            assert len(ofs) == 1
-            of = ofs[0]
         assert isinstance(edge, OutEdgeOp | InEdgeOp)
-
-        of_name = of.sym_name.data
 
         arg_index = self.arg_order.index(edge.tensor.data)
         arg = runtime_sequence.body.block.args[arg_index]
         assert isinstance(arg.type, MemRefType)
 
-        # offsets = cast(tuple[int, ...], op.offsets.get_values()[-4:])
-        # sizes = cast(tuple[int, ...], op.sizes.get_values()[-4:])
-        # strides = cast(tuple[int, ...], op.strides.get_values()[-4:])
+        # step 1: calculate sizes / strides
+        ssis = op.ssis.data
 
-        # assume default layout here:
-        # static_strides = []
-        # current_stride = 1
-        total_offset = 0
-        # for shape, offset in zip(reversed(shapes), reversed(offsets), strict=False):
-        #     static_strides.insert(0, current_stride)
-        #     total_offset += current_stride * offset
-        #     current_stride *= shape
+        # calculate iteration multipliers for every var in the transfer:
+        iteration_mults: dict[IterationVariable, int] = defaultdict(lambda: 1)
+        iteration_mult = 1
 
-        static_sizes = cast(list[int], list(op.sizes.get_values()))
-        static_strides = cast(list[int], list(op.strides.get_values()))
+        # gather all vars to iterate in the dma call:
+        all_vars: Sequence[IterationVariable] = []
 
-        static_sizes, static_strides = canonicalize_transformation(static_sizes, static_strides)
+        # First, iterate over kernel dimensions in the order of operand indeces:
+        operand_indeces = [x.data for x in op.operand_indeces]
+        for index in operand_indeces[::-1]:  # in reverse for row-major fashion
+            kernel_var = next(var for var in ssis.get_kernel_variables() if var.dimension == index)
+            all_vars.append(kernel_var)
 
-        # only the 4th stride is allowed to be zero
-        # if this is not the case, we must insert empty sets
-        # of (size=1, stride=0) pairs
-        min_successors = 3
-        n = len(static_strides)
-        for i in range(max(0, n - min_successors - 1), n):
-            if static_strides[i] == 0 and static_sizes[i] > 1:
-                needed = min_successors - (n - i - 1)
-                for _ in range(max(0, needed)):
-                    static_sizes.insert(i + 1, 1)
-                    static_strides.insert(i + 1, 0)
+        # Next, iterate temporal vars kept local in a memtile
+        reuse_tvars = []
+        for var in ssis.get_temporal_variables():
+            if var.mem_tile_reuse == MemTileReuse.REUSE:
+                iteration_mults[var] = iteration_mult
+                iteration_mult *= var.size
+                reuse_tvars.append(var)
+            else:
                 break
+        non_reuse_tvars = ssis.get_temporal_variables()[len(reuse_tvars) :]
+        all_vars.extend(var for var in reuse_tvars if var.relevant)
 
-        # iteration_strides = [1] * len(static_sizes)
+        # Then, iterate the relevant spatial vars:
+        for var in ssis.get_spatial_variables():
+            iteration_mults[var] = iteration_mult
+            iteration_mult *= var.size
+        all_vars.extend(var for var in ssis.get_spatial_variables() if var.relevant)
 
-        # # add the repeating pattern
-        # # offset is definitely zero for now
-        # iteration_stride = 1
-        # for iter_var in op.ssis.data.variables:
-        #     if (iter_var.relevant or MemTileReuse.NO_REUSE in iter_var.mem_tile_reuse) and iter_var.size > 1:
-        #         # sptial dims must only emit extra sizes and strides if they are used as spatial strides
-        #         if iter_var.spatial:
-        #             iteration_stride *= iter_var.size
-        #         if str(iter_var.dimension) in loop_dimensions:
-        #             index = loop_dimensions.index(str(iter_var.dimension))
-        #             temporal_stride = op.strides.get_values()[index] if not iter_var.spatial else 1
-        #             stride = prod(memref_type.get_shape()[index + 1 :]) *
-        #                       op.sizes.get_values()[index] * temporal_stride
-        #             # stride = prod(op.sizes.get_values()[index:])
-        #             assert isinstance(stride, int)
-        #         else:
-        #             # repeat
-        #             stride = 0
-        #         static_sizes.insert(0, iter_var.size)
-        #         static_strides.insert(0, stride)
-        #         iteration_strides.insert(0, iteration_stride)
-        #     iteration_stride *= iter_var.size
+        # Finally, remaining applicable temporal dims
+        # assume output stationarity:
+        for var in non_reuse_tvars:
+            iteration_mults[var] = iteration_mult
+            iteration_mult *= var.size
+        if isinstance(op, PushOp):
+            all_vars.extend(var for var in non_reuse_tvars if var.applicable)
+        else:  # pull op
+            all_vars.extend(var for var in non_reuse_tvars if var.relevant)
 
-        # canonicalize transformation
-        # if i were to re-enable this, make sure iteration strides are also included
-        # static_sizes, static_strides = canonicalize_transformation(static_sizes, static_strides)
-        MAX_STATIC_SIZE_LEN = 5
-        if len(static_sizes) > MAX_STATIC_SIZE_LEN:
-            raise RuntimeError()
-        if len(static_sizes) == MAX_STATIC_SIZE_LEN:
-            software_size = static_sizes.pop(0)
-            software_stride = static_strides.pop(0)
+        # Calculate strides along with these iteration vars:
+        seen_dims = defaultdict(lambda: 1)
+        all_strides: dict[IterationVariable, int] = {}
+
+        arg_strides = arg.type.get_strides()
+        assert isa(arg_strides, Sequence[int])
+        arg_strides = {x: y for x, y in zip(operand_indeces, arg_strides, strict=True)}
+
+        @dataclass(frozen=True)
+        class Stride:
+            size: int
+            stride: int
+            iteration_t: int
+            spatial: bool = False
+
+        @dataclass(frozen=True)
+        class StrideSet:
+            strides: tuple[Stride, ...]
+
+            def repeats(self) -> int:
+                return prod(var.size for var in self.strides if not var.stride)
+
+            def size(self) -> int:
+                return prod(var.size for var in self.strides if var.stride)
+
+            def total_size(self) -> int:
+                return self.repeats() * self.size()
+
+            def split(self) -> dict[int, Self]:
+                spatial_strides = [s for s in self.strides if s.spatial]
+                if len(spatial_strides) == 0:
+                    return {0: self}
+                assert len(spatial_strides) == 1
+                spatial_stride = spatial_strides[0]
+                idx = self.strides.index(spatial_stride)
+                new_strides = self.strides[:idx] + self.strides[idx + 1 :]
+                result = {}
+                for i in range(spatial_stride.size):
+                    result[i * spatial_stride.stride] = type(self)(new_strides)
+                return result
+
+            def force_squash(self) -> Self:
+                total_size = prod(var.size for var in self.strides if var.stride)
+                repeat = prod(var.size for var in self.strides if var.stride == 0)
+                return type(self)((Stride(total_size, 1, 0), Stride(repeat, 0, 0)))
+
+            def canonicalize(self) -> Self:
+                if any(s.spatial for s in self.strides):
+                    raise RuntimeError("cannot canonicalize strideset with spatial strides")
+                new_strides: list[Stride] = []
+                for var in self.strides:
+                    assert var.size != 0
+                    if var.size == 1:
+                        continue
+                    if not new_strides:
+                        new_strides.append(var)
+                    # check for possible squash
+                    elif var.stride == new_strides[-1].size * new_strides[-1].stride:
+                        new_strides[-1] = Stride(
+                            var.size * new_strides[-1].size,
+                            new_strides[-1].stride,
+                            var.iteration_t // new_strides[-1].size,
+                        )
+                    else:
+                        new_strides.append(var)
+                return type(self)(tuple(new_strides))
+
+            def legalize(self) -> Self:
+                if any(s.spatial for s in self.strides):
+                    raise RuntimeError("cannot legalize strideset with spatial strides")
+                new_strides: list[Stride] = []
+                # make sure that no bound limits are exceeded
+                # FIXME: figure out actual limits
+                # these are innermost to outermost:
+                bound_limits = (1024, 1024, 16384, 64)
+                for i, (stride, bound_limit) in enumerate(zip(self.strides, bound_limits, strict=False)):
+                    if stride.size > bound_limit:
+                        if i < len(bound_limits) - 1:
+                            # find largest number under bound that is a divisor of the size:
+                            divider = None
+                            for d in reversed(range(min(bound_limit, isqrt(stride.size) + 1))):
+                                if stride.size % d == 0:
+                                    divider = d
+                                    break
+                            if divider is None:
+                                raise RuntimeError("Could not find legalized transfer for the runtime sequence.")
+                        else:
+                            divider = stride.size // bound_limit
+                        tiled_size = stride.size // divider
+                        tiled_stride = Stride(tiled_size, stride.stride, stride.iteration_t)
+                        tiling_stride = Stride(divider, stride.stride * tiled_size, stride.iteration_t * tiled_size)
+                        # tile and legalize recursively
+                        return type(self)(
+                            (*self.strides[:i], tiled_stride, tiling_stride, *self.strides[i + 1 :])
+                        ).legalize()
+                changed = False
+                # make sure the inner 3 most strides are nonzero
+                for var in self.strides:
+                    if var.stride == 0 and var.size != 1:
+                        while len(new_strides) < 3:
+                            changed = True
+                            new_strides.append(Stride(1, 0, var.iteration_t))
+                    new_strides.append(var)
+                # make sure the transform is at least 4 strides long
+                while len(new_strides) < 4:
+                    changed = True
+                    new_strides.append(Stride(1, 0, self.strides[-1].iteration_t))
+                new = type(self)(tuple(new_strides))
+                if changed:
+                    return new.legalize()
+                else:
+                    return new
+
+            def force_squash(self) -> Self:
+                # Remove all transormations, reduce to 1D transfer
+                total_size = prod(var.size for var in self.strides if var.stride)
+                repeat_size = prod(var.size for var in self.strides if not var.stride)
+                return type(self)((Stride(total_size, 1, 0), Stride(repeat_size, 0, 0)))
+
+        strides: list[Stride] = []
+
+        for var in all_vars:
+            # multiply the stride by previous iteration vars
+            if var.dimension in arg_strides:
+                stride = seen_dims[var.dimension] * arg_strides[var.dimension]
+                seen_dims[var.dimension] *= var.size
+            else:
+                stride = 0
+            assert isinstance(op.memtile, ArrayAttr)
+            spatial = len(op.memtile) > 1 and var.type == IterationVariableType.SPATIAL and var.size == len(op.memtile)
+            strides.append(Stride(var.size, stride, iteration_mults[var], spatial))
+
+        stride_dict = StrideSet(tuple(strides)).split()
+        if "of_1" in of_chain.hops[1].fifos[0].sym_name.data or "of_20" in of_chain.hops[1].fifos[0].sym_name.data:
+            stride_dict = {x: y.canonicalize().legalize() for x, y in stride_dict.items()}
         else:
-            software_size = 1
-            software_stride = 0
+            stride_dict = {x: y.force_squash().legalize() for x, y in stride_dict.items()}
 
-        static_sizes = (1,) * (4 - len(static_sizes)) + tuple(static_sizes)
-        static_strides = (0,) * (4 - len(static_strides)) + tuple(static_strides)
+        # select correct hop for fifo:
+        if isinstance(op, PullOp):
+            hop = of_chain.hops[1]
+        else:
+            hop = of_chain.hops[0]
 
-        for i in range(software_size):
-            software_offset = i * software_stride
-            # iteration_t = i * iteration_strides[0]
-            iteration_t = 0
-            # static_offsets = (0, 0, 0, total_offset + software_offset)
-            bd_dimensions = BDDimLayoutArrayAttr(
-                BDDimLayoutArray(
-                    [BDDimLayout((size, stride)) for size, stride in zip(static_sizes, static_strides, strict=False)]
+        for i, (spatial_offset, stride_set) in enumerate(stride_dict.items()):
+            hardware_strides = stride_set.strides[:4]
+            # Perform software for loop unrolling:
+            software_strides = stride_set.strides[4:]
+            software_strides_ranges = [
+                [Stride(1, var.stride * i, var.iteration_t * i) for i in range(var.size)] for var in software_strides
+            ]
+            combined_ranges = list(product(*software_strides_ranges))
+            reduced_ranges = [
+                reduce(
+                    lambda x, y: Stride(1, x.stride + y.stride, x.iteration_t + y.iteration_t),
+                    x,
+                    Stride(1, 0, 0),
                 )
-            )
+                for x in combined_ranges
+            ]
 
-            dma_bd = DMABDOp(
-                arg,
-                offset=total_offset + software_offset,
-                len=prod(static_sizes[1:]),
-                dimensions=bd_dimensions,
-            )
+            for r in reduced_ranges:
+                bd_dimensions = BDDimLayoutArrayAttr(
+                    BDDimLayoutArray([BDDimLayout((var.size, var.stride)) for var in hardware_strides[::-1]])
+                )
 
-            # configure task
-            task = DmaConfigureTaskForOp(
-                of_name, Region(Block([dma_bd, EndOp()])), issue_token=False, repeat_count=static_sizes[0] - 1
-            )
+                dma_bd = DMABDOp(
+                    arg,
+                    offset=spatial_offset + r.stride,
+                    len=prod(var.size for var in hardware_strides[:3]),
+                    dimensions=bd_dimensions,
+                )
 
-            task.attributes["iteration_t"] = IntegerAttr.from_index_int_value(iteration_t)
+                # configure task
+                task = DmaConfigureTaskForOp(
+                    hop.fifos[i].sym_name.data,
+                    Region(Block([dma_bd, EndOp()])),
+                    issue_token=False,
+                    repeat_count=hardware_strides[3].size - 1,
+                )
 
-            rewriter.insert_op([task], InsertPoint.before(op))
+                task.attributes["iteration_t"] = IntegerAttr.from_index_int_value(r.iteration_t)
+
+                rewriter.insert_op([task], InsertPoint.before(op))
 
         # remove output from edge op operands
         rewriter.erase_matched_op(safe_erase=False)
@@ -731,7 +931,7 @@ class TransferToObjectFIFOPattern(RewritePattern):
 
     @op_type_rewrite_pattern
     def match_and_rewrite(self, op: PushOp | PullOp, rewriter: PatternRewriter):  # noqa: PLR0912, PLR0915
-        # do the runtime sequence thing elsewhere, must have a core_op parent
+        # Only handle pull/push ops in core ops, which should be converted to object fifos
         parent = op
         while True:
             if isinstance(parent, CoreOp):
@@ -746,12 +946,6 @@ class TransferToObjectFIFOPattern(RewritePattern):
             memref_type = op.output.type
         assert isinstance(memref_type, MemRefType)
         of_chain = self.object_fifo_manager.insert_or_update(op.channel, memref_type)
-
-        # get spatial offset to fetch from correct object fifo
-        # offset = 0
-        # for size, spatial_stride in zip(op.sizes.get_values(), op.spatial_strides.get_values(), strict=True):
-        #     if spatial_stride != 0:
-        #         offset += int((spatial_stride // size) * prod(op.sizes.get_values()))
 
         # decide whether to consume or produce
         join_ofs: Sequence[ObjectFifoOp] = []
@@ -775,16 +969,18 @@ class TransferToObjectFIFOPattern(RewritePattern):
 
         assert isinstance(memref_type := operand.type, MemRefType)
 
+        # if of is not None and "15" in of.sym_name.data:
+        #     breakpoint()
+
         if len(join_ofs):
             # custom handling for programmatic join here:
 
             # multiple spatio-temporal variables get very complex, handle just one
-            # for now:
+            # for now (unfortunately, there is no way to check this anymore)
             use_op = next(x for x in op.results[0].uses).operation
             assert isinstance(use_op, ComputationNodeOp)
             ssis_dest = use_op.ssis.data
-            assert len(ssis_dest.get_spatio_temporal_variables()) == 1
-            st_var = ssis_dest.get_spatio_temporal_variables()[0]
+            st_var = ssis_dest.get_temporal_variables()[0]
             for_op = op.parent_op()
             assert isinstance(for_op, ForOp)
             assert for_op.attributes.get("layer_dim") == StringAttr(str(st_var.dimension))
@@ -830,19 +1026,19 @@ class TransferToObjectFIFOPattern(RewritePattern):
             return
 
         # otherwise, default flow with one objectfifo:
-        assert of is not None
+        # assert of is not None
+        # if "of_11" in of.sym_name.data:
+        #     print([(str(v), v.compute_tile_reuse) for v in op.ssis.data.variables])
+        #     breakpoint()
 
         first_relevant_iter = next(iv for iv in op.ssis.data.get_temporal_variables() if iv.relevant)
         first_relevant_index = op.ssis.data.get_temporal_variables().index(first_relevant_iter)
 
-        last_reuse = next(
-            (
-                iv
-                for iv in op.ssis.data.get_temporal_variables()[::-1]
-                if iv.compute_tile_reuse == ComputeTileReuse.REUSE
-            ),
-            None,
-        )
+        last_reuse = None
+        for var in reversed(op.ssis.data.get_temporal_variables()):
+            if var.reuse == Reuse.REUSE:
+                last_reuse = var
+                break
         if last_reuse:
             last_reuse_index = op.ssis.data.get_temporal_variables().index(last_reuse)
             reuse_iters = op.ssis.data.get_temporal_variables()[first_relevant_index : last_reuse_index + 1]
@@ -1612,23 +1808,28 @@ class EraseEdges(RewritePattern):
 @dataclass
 class OrderDMAs(RewritePattern):
     @op_type_rewrite_pattern
-    def match_and_rewrite(self, op: DmaConfigureTaskForOp, rewriter: PatternRewriter) -> None:
-        if not isinstance(next := op.next_op, DmaConfigureTaskForOp):
-            return
-        if "iteration_t" not in op.attributes or "iteration_t" not in next.attributes:
-            return
-        assert isa(iteration_t := op.attributes["iteration_t"], IntegerAttr[IndexType])
-        assert isa(next_iteration_t := next.attributes["iteration_t"], IntegerAttr[IndexType])
-        if iteration_t.value.data > next_iteration_t.value.data:
-            op.detach()
-            rewriter.insert_op(op, InsertPoint.after(next))
+    def match_and_rewrite(self, op: RuntimeSequenceOp, rewriter: PatternRewriter) -> None:
+        dma_ops = [op for op in op.body.block.ops if isinstance(op, DmaConfigureTaskForOp)]
+        dma_ops = sorted(dma_ops, key=lambda op: op.attributes["iteration_t"].value.data)
+        for dma_op in dma_ops:
+            dma_op.detach()
+        rewriter.insert_op(dma_ops, InsertPoint.at_start(op.body.block))
 
 
 @dataclass
 class SyncDMAs(RewritePattern):
+    """
+    This pass will synchronize dma configure taks ops, inserting wait statements where needed.
+    We only allocate one bd per object fifo, and will wait for it to finish every time
+    a new transfer for that object fifo is initiated.
+    """
+
     @op_type_rewrite_pattern
     def match_and_rewrite(self, op: RuntimeSequenceOp, rewriter: PatternRewriter):
-        active_tasks: dict[Attribute, tuple[DmaConfigureTaskForOp | None, DmaConfigureTaskForOp]] = {}
+        active_tasks: dict[Attribute, list[DmaConfigureTaskForOp]] = {}
+
+        # ping ponging between two bds per object fifo, so we can have at most one active task per object fifo at a time
+        nb_bds_per_of = 2
 
         for dma in op.walk():
             if not isinstance(dma, DmaConfigureTaskForOp):
@@ -1636,16 +1837,19 @@ class SyncDMAs(RewritePattern):
 
             # update active tasks list and potentionaly sync on previous one
             if dma.alloc not in active_tasks:
-                active_tasks[dma.alloc] = (None, dma)
+                active_tasks[dma.alloc] = [dma]
+            elif len(active_tasks[dma.alloc]) < nb_bds_per_of:
+                active_tasks[dma.alloc].append(dma)
             else:
-                if (wait_for := active_tasks[dma.alloc][0]) is not None:
-                    # issue token if we are going to wait for it
-                    wait_for.issue_token = IntegerAttr.from_int_and_width(1, 1)
-                    rewriter.insert_op(DmaAwaitTaskOp(wait_for), InsertPoint.before(dma))
-                active_tasks[dma.alloc] = (active_tasks[dma.alloc][1], dma)
+                assert len(active_tasks[dma.alloc]) == nb_bds_per_of
+                to_sync = active_tasks[dma.alloc].pop(0)
+                to_sync.issue_token = IntegerAttr.from_int_and_width(1, 1)
+                rewriter.insert_op(DmaAwaitTaskOp(to_sync), InsertPoint.before(dma))
+                active_tasks[dma.alloc].append(dma)
 
         # at the end, wait for all latest tasks
-        for _, task in active_tasks.values():
+        for tasklist in active_tasks.values():
+            task = tasklist[-1]
             task.issue_token = IntegerAttr.from_int_and_width(1, 1)
             rewriter.insert_op(DmaAwaitTaskOp(task), InsertPoint.at_end(op.body.block))
 
@@ -1655,6 +1859,66 @@ class StartDMAs(RewritePattern):
     @op_type_rewrite_pattern
     def match_and_rewrite(self, op: DmaConfigureTaskForOp, rewriter: PatternRewriter):
         rewriter.insert_op(DmaStartTaskOp(op), InsertPoint.after(op))
+
+
+@dataclass
+class SetKernelLayouts(RewritePattern):
+    kernels: dict[str, AIEKernel]
+
+    @op_type_rewrite_pattern
+    def match_and_rewrite(self, op: ComputationNodeOp, rewriter: PatternRewriter) -> None:
+        aie_kernel = self.kernels.get(op.kernel.data)
+        assert aie_kernel is not None
+        layouts = aie_kernel.operand_layouts()
+        if not layouts:
+            return
+        shaped_operands = [operand for operand in op.operands if isinstance(operand.type, ShapedType)]
+        for layout, operand in zip(layouts, shaped_operands, strict=True):
+            assert isa(old_type := operand.type, MemRefType[FixedBitwidthType])
+            layout_attr = TiledStridedLayoutAttr(layout)
+            if old_type.layout == layout_attr:
+                continue
+            new_type = MemRefType(old_type.element_type, old_type.shape, layout_attr, old_type.memory_space)
+            new_operand = LayoutCast(operand, new_type)
+            rewriter.insert_op(new_operand, InsertPoint.before(op))
+            operand.replace_by_if(new_operand.results[0], lambda use: use.operation is op)
+
+
+@dataclass
+class HoistLayoutCasts(RewritePattern):
+    @op_type_rewrite_pattern
+    def match_and_rewrite(self, op: LayoutCast, rewriter: PatternRewriter) -> None:
+        assert isinstance(op.source, OpResult)
+        if isinstance(op.source.op, ObjectFIFOSubviewAccessOp):
+            # good, this is what we want
+            return
+        elif isinstance(switch := op.source.op, IndexSwitchOp):
+            # push up layout cast
+            for case in (switch.default_region, *switch.case_regions):
+                yield_op = case.block.last_op
+                assert isinstance(yield_op, YieldOp)
+                yielded = yield_op.arguments[0]
+                assert isa(op.dest.type, MemRefType[FixedBitwidthType])
+                new_cast = LayoutCast(yielded, op.dest.type)
+                yield_op.operands[0] = new_cast.dest
+                assert isinstance(yielded.owner, Operation)
+                rewriter.insert_op(new_cast, InsertPoint.after(yielded.owner))
+            switch.results[0].type = op.dest.type
+            op.dest.replace_by(switch.output[0])
+            rewriter.erase_op(op)
+
+
+@dataclass
+class SquashLayoutCasts(RewritePattern):
+    @op_type_rewrite_pattern
+    def match_and_rewrite(self, op: LayoutCast, rewriter: PatternRewriter) -> None:
+        layout_casts = [use.operation for use in op.source.uses if isinstance(use.operation, LayoutCast)]
+        # all dest types must be equal
+        assert all(op.dest.type == cast.dest.type for cast in layout_casts)
+        # keep only this one
+        for cast_to_remove in filter(lambda x: x is not op, layout_casts):
+            cast_to_remove.dest.replace_by(op.dest)
+            rewriter.erase_op(cast_to_remove)
 
 
 @dataclass
@@ -1880,69 +2144,107 @@ class RealizeLayoutCats(RewritePattern):
     def match_and_rewrite(self, op: LayoutCast, rewriter: PatternRewriter):
         # gather some variables
         assert isinstance(op.source, OpResult)
-        assert isinstance(index_op := op.source.op, IndexSwitchOp)
-        assert isinstance(
-            subview_access := index_op.default_region.block.last_op.operands[0].op, ObjectFIFOSubviewAccessOp
-        )
+        assert isinstance(subview_access := op.source.op, ObjectFIFOSubviewAccessOp)
         # assert isinstance(subview_access := op.source.op, ObjectFIFOSubviewAccessOp)
         assert isinstance(subview_access.subview, OpResult)
         assert isinstance(of_acquire := subview_access.subview.op, ObjectFifoAcquireOp)
 
-        dest_type = cast(MemRefType[Attribute], op.dest.type)
-
-        # get the objectfifo
-        # check if producer or consumer
-        port = ObjectFifoPortEnum.from_int(of_acquire.port.value.data)
+        if op.dest.type == op.source.type:
+            op.dest.replace_by(op.source)
+            rewriter.erase_matched_op()
+            return
 
         # get the chain:
         chain = self.of_manager.get_of_chain(of_acquire.objFifo_name.root_reference.data)
 
-        # get the hop starting from a memtile:
-        hop = chain.hops[1]
+        # get all acquires and releases
+        consumers: list[ObjectFifoAcquireOp] = []
+        producers: list[ObjectFifoAcquireOp] = []
+        for hop in chain.hops:
+            for fifo in hop.fifos:
+                for acquire in self.of_manager.all_acquires(fifo.sym_name.data):
+                    match ObjectFifoPortEnum.from_int(acquire.port.value.data):
+                        case ObjectFifoPortEnum.Consume:
+                            consumers.append(acquire)
+                        case ObjectFifoPortEnum.Produce:
+                            producers.append(acquire)
 
-        # get the element_type
-        element_type = cast(MemRefType[Attribute], hop.fifos[0].elemType.buffer)
+        def gather_layout(acquires: Sequence[ObjectFifoAcquireOp]) -> MemRefType[FixedBitwidthType] | None:
+            result = []
+            for acquire in acquires:
+                for subview in acquire.result.uses:
+                    if isinstance(subview.operation, ObjectFIFOSubviewAccessOp):
+                        for cast in subview.operation.output.uses:
+                            if isinstance(cast.operation, LayoutCast):
+                                dest_type = cast.operation.dest.type
+                                assert isa(dest_type, MemRefType[FixedBitwidthType])
+                                result.append(dest_type)
+            if len(result) == 0:
+                return None
+            else:
+                assert all([x == result[0] for x in result])
+                return result[0]
 
-        tsl_dest = cast(TiledStridedLayoutAttr, dest_type.layout).data
+        consumer_type = gather_layout(consumers)
+        producer_type = gather_layout(producers)
 
-        # create default tsl layout for source:
-        strides = [1]
-        for size in reversed(dest_type.shape.data[1:]):
-            strides = [size.data * strides[0]] + strides
-        tile_bounds = tsl_dest.tile_bounds()
+        # create row-major layouts for those without explicit casts:
 
-        tsl_in = TiledStridedLayout.from_strides(strides, tile_bounds)  # pyright: ignore
-        tsl_out = cast(TiledStridedLayoutAttr, dest_type.layout).data
+        if consumer_type is None:
+            assert producer_type is not None
+            assert isinstance(producer_type.layout, TiledStridedLayoutAttr)
+            producer_layout = producer_type.layout.data
+            strides = [1]
+            for size in reversed(producer_type.shape.data[1:]):
+                strides = [size.data * strides[0]] + strides
+            assert isinstance(producer_type.layout, TiledStridedLayoutAttr)
+            tile_bounds = producer_type.layout.data.tile_bounds()
+            consumer_layout = TiledStridedLayout.from_strides(strides, tile_bounds)  # pyright: ignore
+        elif producer_type is None:
+            assert consumer_type is not None
+            assert isinstance(consumer_type.layout, TiledStridedLayoutAttr)
+            consumer_layout = consumer_type.layout.data
+            strides = [1]
+            for size in reversed(consumer_type.shape.data[1:]):
+                strides = [size.data * strides[0]] + strides
+            assert isinstance(consumer_type.layout, TiledStridedLayoutAttr)
+            tile_bounds = consumer_type.layout.data.tile_bounds()
+            producer_layout = TiledStridedLayout.from_strides(strides, tile_bounds)  # pyright: ignore
+        else:
+            assert isinstance(consumer_type.layout, TiledStridedLayoutAttr)
+            consumer_layout = consumer_type.layout.data
+            assert isinstance(producer_type.layout, TiledStridedLayoutAttr)
+            producer_layout = producer_type.layout.data
 
-        # calculate transform
+        sizes, strides = get_transform(producer_layout, consumer_layout)
 
-        # check if producer on consumer
-        if port == ObjectFifoPortEnum.Consume:
-            sizes, strides = get_transform(tsl_in, tsl_out)
-        else:  # Produce
-            sizes, strides = get_transform(tsl_out, tsl_in)
+        transform_is_null = len(sizes) == 1 and strides == [1]
 
         # create BDDimlayout
         bd_layout = BDDimLayoutArrayAttr(
-            BDDimLayoutArray([BDDimLayout((size, stride)) for size, stride in zip(sizes, strides, strict=False)])
+            BDDimLayoutArray([BDDimLayout((size, stride)) for size, stride in zip(sizes, strides, strict=True)])
         )
 
+        # take last fifo in the chain (starting form memtile i)
+        hop = chain.hops[-1]
         for fifo in hop.fifos:
-            fifo.elemType = ObjectFIFO([MemRefType(element_type.element_type, element_type.shape, dest_type.layout)])
-            fifo.dimensionsToStream = bd_layout
+            # fifo.elemType = ObjectFIFO([MemRefType(element_type.element_type, element_type.shape, dest_type.layout)])
+            if not transform_is_null:
+                fifo.dimensionsToStream = bd_layout
 
-        element_type = cast(MemRefType[Attribute], hop.fifos[0].elemType.buffer)
+        if consumer_type is not None:
+            for consumer in consumers:
+                consumer.result.type = ObjectFIFOSubview([consumer_type])
+                for use in consumer.result.uses:
+                    if isinstance(use.operation, ObjectFIFOSubviewAccessOp):
+                        use.operation.output.type = consumer_type
 
-        of_layout = element_type.layout
-
-        assert of_layout == dest_type.layout
-        # transform has already been applied to ObjectFIFO
-        of_acquire.results[0].type = ObjectFIFOSubview([dest_type])
-        subview_access.results[0].type = dest_type
-        index_op.results[0].type = dest_type
-        assert op.source.type == op.dest.type
-        op.dest.replace_by(op.source)
-        rewriter.erase_matched_op()
+        if producer_type is not None:
+            for producer in producers:
+                producer.result.type = ObjectFIFOSubview([producer_type])
+                for use in producer.result.uses:
+                    if isinstance(use.operation, ObjectFIFOSubviewAccessOp):
+                        use.operation.output.type = producer_type
 
 
 @dataclass
@@ -1961,6 +2263,67 @@ class OrderCoreOps(RewritePattern):
         if get_tile_idx(op) > get_tile_idx(next_op):
             next_op.detach()
             rewriter.insert_op(next_op, InsertPoint.before(op))
+
+
+@dataclass
+class RemoveSpatioTemporality(RewritePattern):
+    # Complete a bubble-type sorting of core ops for a more deterministic output
+    @op_type_rewrite_pattern
+    def match_and_rewrite(self, core_op: CoreOp, rewriter: PatternRewriter):  # noqa: PLR0912
+        block = core_op.region.block
+        ops: Sequence[PushOp | PullOp | ComputationNodeOp] = []
+        ssis = None
+
+        # First, gather ops
+        for op in block.ops:
+            if isinstance(op, ComputationNodeOp):
+                ssis = op.ssis.data
+                # if "silu" in op.kernel.data:
+                #     breakvar = True
+                #     breakpoint()
+            if isinstance(op, PushOp | PullOp | ComputationNodeOp):
+                # FIXME: hack, upon hack, upon hack:
+                # this is for the output, which we fixed a while back
+                # this op is already in the clear, we should not change the
+                # ssis anymore
+                if isinstance(op, PushOp) and not isinstance(op.memtile, NoneAttr):
+                    pass
+                else:
+                    ops.append(op)
+            elif isinstance(op, EndOp):
+                pass
+            else:
+                raise RuntimeError("non-steady state op encountered")
+
+        assert ssis is not None
+
+        if not len(ssis.get_spatio_temporal_variables()):
+            return
+
+        new_ssis_vars: list[list[IterationVariable]] = [[] for _ in range(len(ops))]
+        new_ssis_tvars: list[list[IterationVariable]] = [[] for _ in range(len(ops))]
+        for i, var in enumerate(ssis.variables):
+            for j, op in enumerate(ops):
+                opvar = deepcopy(op.ssis.data.variables[i])
+                if var.dimension != opvar.dimension:
+                    # FIXME: hare
+                    raise RuntimeError()
+                assert var.dimension == opvar.dimension
+                assert var.size == opvar.size
+
+                if var.type in (IterationVariableType.KERNEL, IterationVariableType.SPATIAL):
+                    new_ssis_vars[j].append(opvar)
+                elif var.type == IterationVariableType.SPATIOTEMPORAL:
+                    opvar.type = IterationVariableType.TEMPORAL
+                    new_ssis_tvars[j].append(opvar)
+                else:
+                    new_ssis_tvars[j].append(opvar)
+        # merge vars again:
+        new_ssis_vars = [x + y for x, y in zip(new_ssis_vars, new_ssis_tvars, strict=True)]
+        new_ssis = [SteadyStateIterationSpace(vars) for vars in new_ssis_vars]
+
+        for op, ssis in zip(ops, new_ssis, strict=True):
+            op.properties["ssis"] = SteadyStateIterationSpaceAttr(ssis)
 
 
 @dataclass
@@ -2096,24 +2459,34 @@ class ConvertStreamToAIEPass(ModulePass):
         ).rewrite_module(op)
 
         PatternRewriteWalker(OrderCoreOps()).rewrite_module(op)
+        with open("test5.mlir", "w") as f:
+            f.write(str(op))
+        PatternRewriteWalker(RemoveSpatioTemporality()).rewrite_module(op)
+        with open("test6.mlir", "w") as f:
+            f.write(str(op))
 
         for core_op in device_op.region.block.ops:
             if isinstance(core_op, CoreOp):
                 # insert runtime sequence op
                 iteration_space_to_for(core_op.region.block, rewriter)
 
+        with open("test7.mlir", "w") as f:
+            f.write(str(op))
+
         PatternRewriteWalker(
             TransferToObjectFIFOPattern(object_fifo_manager),
             apply_recursively=False,
         ).rewrite_module(op)
+
+        with open("test8.mlir", "w") as f:
+            f.write(str(op))
 
         PatternRewriteWalker(
             TransferToRuntimeSequence(object_fifo_manager, arg_order),
             apply_recursively=False,
         ).rewrite_module(op)
 
-        # insert dma wait statements for bd collisions
-        PatternRewriteWalker(OrderDMAs()).rewrite_module(op)
+        PatternRewriteWalker(OrderDMAs(), apply_recursively=False).rewrite_module(op)
         PatternRewriteWalker(SyncDMAs(), apply_recursively=False).rewrite_module(op)
         PatternRewriteWalker(StartDMAs(), apply_recursively=False).rewrite_module(op)
 
@@ -2123,14 +2496,22 @@ class ConvertStreamToAIEPass(ModulePass):
         PatternRewriteWalker(MMPattern(tile_op_manager), apply_recursively=False).rewrite_module(op)
 
         # Use the new convert aie kernels operation:
+        assert npu is AIEDeviceEnum.npu2
+        PatternRewriteWalker(SetKernelLayouts(self.aie_kernels)).rewrite_module(op)
+        PatternRewriteWalker(HoistLayoutCasts()).rewrite_module(op)
+        PatternRewriteWalker(SquashLayoutCasts()).rewrite_module(op)
+        with open("test4.mlir", "w") as f:
+            f.write(str(op))
         PatternRewriteWalker(ConvertAIEKernels(self.aie_kernels)).rewrite_module(op)
 
         # handle layouts
-        match npu:
-            case AIEDeviceEnum.npu1:
-                PatternRewriteWalker(SetKernelLayoutsNPU1()).rewrite_module(op)
-            case AIEDeviceEnum.npu2:
-                PatternRewriteWalker(SetKernelLayoutsNPU2()).rewrite_module(op)
+        assert npu is AIEDeviceEnum.npu2
+        # PatternRewriteWalker(SetKernelLayouts()).rewrite_module(op)
+        # match npu:
+        #     case AIEDeviceEnum.npu1:
+        #         PatternRewriteWalker(SetKernelLayoutsNPU1()).rewrite_module(op)
+        #     case AIEDeviceEnum.npu2:
+        #         PatternRewriteWalker(SetKernelLayoutsNPU2()).rewrite_module(op)
         PatternRewriteWalker(RealizeLayoutCats(object_fifo_manager)).rewrite_module(op)
 
         PatternRewriteWalker(InfinteLoopCol(), apply_recursively=False).rewrite_module(op)
