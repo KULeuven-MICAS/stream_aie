@@ -4,26 +4,58 @@
 
 See: .planning/PROJECT.md (updated 2026-04-02)
 
-**Core value:** Enable the constraint optimizer to explore variable tile sizes across workload dimensions
-**Current focus:** Milestone v2.0 initialization
+**Core value:** Enable the constraint optimizer to explore variable tile sizes across workload dimensions, finding better allocation solutions than fixed tiling allows
+**Current focus:** Phase 1 - Baseline Validation
 
 ## Current Position
 
-Phase: Not started (defining requirements)
-Plan: --
-Status: Defining requirements
-Last activity: 2026-04-02 — Milestone v2.0 started
+Phase: 1 of 6 (Baseline Validation)
+Plan: 0 of ? in current phase
+Status: Ready to plan
+Last activity: 2026-04-02 — Roadmap created for milestone v2.0
+
+Progress: [░░░░░░░░░░] 0%
+
+## Performance Metrics
+
+**Velocity:**
+- Total plans completed: 0
+- Average duration: -
+- Total execution time: 0 hours
+
+**By Phase:**
+
+| Phase | Plans | Total | Avg/Plan |
+|-------|-------|-------|----------|
+| - | - | - | - |
+
+**Recent Trend:**
+- Last 5 plans: -
+- Trend: -
+
+*Updated after each plan completion*
 
 ## Accumulated Context
 
-- Codebase mapped with focus on tiling_generation.py and transfer_and_tensor_allocation.py
-- Key integration gap identified: tiling generates fixed sizes, CO consumes them as constants
-- z_stop variables select reuse levels but don't vary tile dimensions
-- BIG BOY config (256x2048x8192, tiles 16/128/32) available as baseline validation target
+### Decisions
 
-## Session History
+Decisions are logged in PROJECT.md Key Decisions table.
+Recent decisions affecting current work:
 
-| Date | Activity | Outcome |
-|------|----------|---------|
-| 2026-04-02 | Codebase mapping | 7 documents in .planning/codebase/ |
-| 2026-04-02 | Milestone v2.0 init | PROJECT.md and STATE.md created |
+- None yet (see PROJECT.md Key Decisions for pending decisions)
+
+### Pending Todos
+
+None yet.
+
+### Blockers/Concerns
+
+- Phase 3: Exact shape of tile_coeff_var INTEGER vs. binary re-expansion needs formulation decision before implementation
+- Phase 4: Number of distinct (t, stop, k) triples in BIG BOY config not quantified — variable count may be large
+- Phase 2: SteadyStateScheduler.generate_ssis() side-effect safety for per-candidate calls needs verification
+
+## Session Continuity
+
+Last session: 2026-04-02
+Stopped at: Roadmap written; ready to begin Phase 1 planning
+Resume file: None

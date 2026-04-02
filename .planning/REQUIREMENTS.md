@@ -58,25 +58,25 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| BASE-01 | -- | Pending |
-| BASE-02 | -- | Pending |
-| TILE-01 | -- | Pending |
-| TILE-02 | -- | Pending |
-| TILE-03 | -- | Pending |
-| TILE-04 | -- | Pending |
-| CO-01 | -- | Pending |
-| CO-02 | -- | Pending |
-| CO-03 | -- | Pending |
-| CO-04 | -- | Pending |
-| CO-05 | -- | Pending |
-| PIPE-01 | -- | Pending |
-| PIPE-02 | -- | Pending |
+| BASE-01 | Phase 1 | Pending |
+| BASE-02 | Phase 1 | Pending |
+| TILE-01 | Phase 2 | Pending |
+| TILE-02 | Phase 2 | Pending |
+| TILE-04 | Phase 2 | Pending |
+| TILE-03 | Phase 3 | Pending |
+| CO-01 | Phase 3 | Pending |
+| CO-05 | Phase 3 | Pending |
+| CO-02 | Phase 4 | Pending |
+| CO-04 | Phase 4 | Pending |
+| CO-03 | Phase 5 | Pending |
+| PIPE-01 | Phase 6 | Pending |
+| PIPE-02 | Phase 6 | Pending |
 
 **Coverage:**
 - v2.0 requirements: 13 total
-- Mapped to phases: 0
-- Unmapped: 13
+- Mapped to phases: 13
+- Unmapped: 0
 
 ---
 *Requirements defined: 2026-04-02*
-*Last updated: 2026-04-02 after initial definition*
+*Last updated: 2026-04-02 after roadmap creation*
