@@ -29,7 +29,10 @@ Decimal phases appear between their surrounding integers in numeric order.
   1. Running main_swiglu_v2.py with BIG BOY args (256x2048x8192, tiles 16/128/32) completes without error and produces a CO objective value
   2. A regression test asserts the exact CO objective value, z_stop assignments, and per-transfer fire counts against the captured fixture
   3. The regression test passes when run against the unmodified fixed-tile pipeline
-**Plans**: TBD
+**Plans**: 2 plans
+Plans:
+- [ ] 01-01-PLAN.md — tile_options schema support, make_swiglu_mapping_v2, main_swiglu_v2.py entry point, pytest setup
+- [ ] 01-02-PLAN.md — Generate baseline fixture from BIG BOY CO run, create regression test suite
 
 ### Phase 2: TileSizeLUT Infrastructure
 **Goal**: A pure-Python TileSizeLUT module precomputes all tile-dependent scalar quantities for every candidate tile, and candidate lists are pre-filtered for divisibility and memory feasibility
@@ -89,11 +92,11 @@ Decimal phases appear between their surrounding integers in numeric order.
 ## Progress
 
 **Execution Order:**
-Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6
+Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Baseline Validation | 0/? | Not started | - |
+| 1. Baseline Validation | 0/2 | Planning complete | - |
 | 2. TileSizeLUT Infrastructure | 0/? | Not started | - |
 | 3. Tile Selection Variables + Memory Constraints | 0/? | Not started | - |
 | 4. Variable SSIS + FIFO Constraints | 0/? | Not started | - |
