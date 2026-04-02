@@ -110,7 +110,11 @@ class MappingFactory:
         assert isinstance(node, ComputationNode), f"Node {node_name} not found in workload."
         dim = self.workload.get_dims(node)[dim_idx]
         assert isinstance(dim, LayerDim), f"Dimension at index {dim_idx} of node {node_name} is not a LayerDim."
-        return dim, int(entry["tile"])
+        if "tile_options" in entry:
+            tile_value = int(entry["tile_options"][0])
+        else:
+            tile_value = int(entry["tile"])
+        return dim, tile_value
 
     def create_runtime_args(self) -> dict[str, str]:
         runtime_args = {}
