@@ -70,6 +70,7 @@ lint.pylint.max-args = 8
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["."]
 markers = [
     "slow: marks tests as slow CO pipeline tests (deselect with '-m \"not slow\"')",
 ]
