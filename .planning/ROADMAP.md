@@ -13,7 +13,7 @@ This milestone extends the existing Gurobi MILP constraint optimizer to treat in
 Decimal phases appear between their surrounding integers in numeric order.
 
 - [ ] **Phase 1: Baseline Validation** - New main entry point runs existing fixed-tile pipeline on BIG BOY config; regression test captures ground truth
-- [ ] **Phase 2: TileSizeLUT Infrastructure** - Pure-Python LUT precomputes all tile-dependent quantities per candidate; candidate pre-filtering
+- [ ] **Phase 2: TileSizeLUT Infrastructure** - Pure-Python utility functions for tensor-size computation per candidate; candidate pre-filtering and SearchSpace infrastructure
 - [ ] **Phase 3: Tile Selection Variables + Memory Constraints** - Binary w[dim,k] variables introduced; memory capacity constraints linearized over tile selection
 - [ ] **Phase 4: Variable SSIS + FIFO Constraints** - SSIS loop sizes and object FIFO depth constraints propagate tile selection
 - [ ] **Phase 5: Variable Transfer Latency** - Transfer latency constraints linearized over tile selection; all tile-dependent CO quantities complete
@@ -35,14 +35,14 @@ Plans:
 - [ ] 01-02-PLAN.md — Generate baseline fixture from BIG BOY CO run, create regression test suite
 
 ### Phase 2: TileSizeLUT Infrastructure
-**Goal**: A pure-Python TileSizeLUT module precomputes all tile-dependent scalar quantities for every candidate tile, and candidate lists are pre-filtered for divisibility and memory feasibility
+**Goal**: Pure-Python utility functions compute tensor sizes per candidate tile, candidate lists are pre-filtered for divisibility and memory feasibility, and a SearchSpace/CandidateFilterStage infrastructure is in place for downstream CO phases
 **Depends on**: Phase 1
 **Requirements**: TILE-01, TILE-02, TILE-04
 **Success Criteria** (what must be TRUE):
-  1. User can pass a list of candidate tile sizes as input; the list is accepted by TileSizeLUT.build() without error
-  2. For each (unique workload dimension, candidate tile) pair, TileSizeLUT holds precomputed tensor sizes, SSIS loop sizes, reuse levels, and transfer latencies as Python scalars
+  1. User can pass a list of candidate tile sizes as input; the list is accepted and threaded through the pipeline without error
+  2. Tensor-size utility functions compute per-candidate tensor sizes on demand; SSIS loop sizes, reuse levels, and transfer size utilities are added incrementally in Phases 3-5 as each CO constraint type needs them
   3. Candidates that are not divisors of their workload dimension or that exceed core memory capacity are excluded before any Gurobi variable is created
-  4. TileSizeLUT unit tests pass independently with no Gurobi dependency
+  4. Unit tests for SearchSpace, utility functions, and CandidateFilterStage pass independently with no Gurobi dependency
 **Plans**: 2 plans
 Plans:
 - [ ] 02-01-PLAN.md — SearchSpace/TileSizeOption data model, tile_size_utils.py utility functions, unit tests
@@ -51,7 +51,7 @@ Plans:
 ### Phase 3: Tile Selection Variables + Memory Constraints
 **Goal**: The CO model contains binary w[dim,k] tile selection variables with one-hot constraints, and memory capacity constraints use LUT-derived linear expressions with tight per-constraint big-M bounds
 **Depends on**: Phase 2
-**Requirements**: TILE-03, CO-01, CO-05
+**Requirements**: TILE-03, TILE-05, CO-01, CO-05
 **Success Criteria** (what must be TRUE):
   1. For each unique workload dimension, exactly one w[dim,k] binary variable is selected (one-hot constraint is enforced by the solver)
   2. Memory capacity constraints use sum_k(tensor_size_lut[t,k] * w[dim,k]) in place of a scalar tensor_size constant
