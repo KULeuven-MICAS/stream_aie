@@ -67,3 +67,9 @@ fix = true
 lint.select = ["E", "F", "W", "I", "PL", "N", "UP", "B"]
 lint.ignore = ["D401", "N806"]
 lint.pylint.max-args = 8
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "slow: marks tests as slow CO pipeline tests (deselect with '-m \"not slow\"')",
+]
