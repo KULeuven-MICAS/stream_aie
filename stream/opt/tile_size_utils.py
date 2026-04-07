@@ -7,6 +7,8 @@ natural memoization at the CO model construction scope.
 
 from __future__ import annotations
 
+import math
+
 from stream.datatypes import InterCoreTiling, LayerDim
 from stream.hardware.architecture.core import Core
 from stream.mapping.mapping import Mapping
@@ -130,3 +132,96 @@ def passes_single_tensor_memory_check(
         if size > capacity:
             return False
     return True
+
+
+def ssis_loop_sizes_for_candidate(
+    dim: LayerDim,
+    candidate_tile: int,
+    workload: Workload,
+    mapping: Mapping,
+) -> tuple[int, int]:
+    """Return (K, T) for a candidate tile on dim.
+
+    Per D-08/D-09: delegates to the SSIS K × S × T = workload_size decomposition.
+    K = candidate_tile (kernel/intra-core tile size).
+    T = workload_size / (S × K) where S is the spatial unrolling factor.
+
+    This is a convenience wrapper that does not require a pre-built SSIS object.
+    For use at CO model construction time when the SSIS is not yet available.
+
+    Parameters
+    ----------
+    dim : LayerDim
+        The dimension being tiled.
+    candidate_tile : int
+        The candidate intra-core tile size for this dimension.
+    workload : Workload
+    mapping : Mapping
+
+    Returns
+    -------
+    (K, T) where K = candidate_tile and T = workload_size / (S * K).
+    """
+    _, unique_spatial_unrollings = collect_spatial_unrollings(workload, mapping)
+    unrollings_dict = dict(unique_spatial_unrollings)
+    S = unrollings_dict.get(dim, 1)
+    workload_size = workload.get_dimension_size(dim)
+    K = candidate_tile
+    T, rem = divmod(workload_size, S * K)
+    assert rem == 0, (
+        f"workload_size {workload_size} not divisible by S*K = {S}*{K} = {S * K}"
+    )
+    return K, T
+
+
+def reuse_coefficients_for_sizes(
+    sizes: list[int],
+    relevancies: list[bool],
+) -> tuple[dict[int, int], dict[int, int], dict[int, int], dict[int, int]]:
+    """Compute per-stop-level reuse coefficients from temporal loop sizes and relevancies.
+
+    Returns four dicts keyed by stop level (−1 = outermost / no stop, 0..N-1 = innermost
+    to outermost stop positions):
+
+    - fires_per_stop:       product of all loop sizes above this stop level
+    - size_factor_per_stop: product of relevant loop sizes above this stop level
+    - tiles_needed_per_stop: same as size_factor (distinct tile slots needed)
+    - bds_needed_per_stop:  product of irrelevant loop sizes in the innermost
+                            contiguous irrelevant block above this stop level
+
+    Parameters
+    ----------
+    sizes : list[int]
+        Temporal loop trip-counts, innermost first.
+    relevancies : list[bool]
+        Corresponding relevancy flags (True = relevant / varying).
+    """
+    fires_out: dict[int, int] = {}
+    size_factor_out: dict[int, int] = {}
+    tiles_needed_out: dict[int, int] = {}
+    bds_needed_out: dict[int, int] = {}
+
+    fires = math.prod(sizes)
+    size_factor = 1
+    tiles_needed = 1
+    bds_needed = 1
+
+    fires_out[-1] = fires
+    size_factor_out[-1] = size_factor
+    tiles_needed_out[-1] = tiles_needed
+    bds_needed_out[-1] = bds_needed
+
+    for i, (Nl, relevancy) in enumerate(zip(sizes, relevancies, strict=True)):
+        size_factor *= Nl if relevancy else 1
+        tiles_needed *= Nl if relevancy else 1
+        fires //= Nl
+        if relevancy:
+            bds_needed = 1
+        else:
+            bds_needed *= Nl
+        fires_out[i] = fires
+        size_factor_out[i] = size_factor
+        tiles_needed_out[i] = tiles_needed
+        bds_needed_out[i] = bds_needed
+
+    return fires_out, size_factor_out, tiles_needed_out, bds_needed_out
