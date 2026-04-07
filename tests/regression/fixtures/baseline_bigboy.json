@@ -1,7 +1,7 @@
 {
-  "latency_total": 922357343,
-  "latency_per_iteration": 10716,
-  "overlap": 3679,
+  "latency_total": 1256726906,
+  "latency_per_iteration": 18158,
+  "overlap": 8570,
   "fire_counts": {
     "Transfer(input)": 64,
     "Transfer(input_1)": 8192,
@@ -37,19 +37,19 @@
       ]
     },
     "Transfer(input_1)__out0": {
-      "reuse_factor": 1,
+      "reuse_factor": 128,
       "loops": [
         {
           "dim": "z0",
           "size": 16,
           "relevant": true,
-          "reuse": "No Reuse"
+          "reuse": "Reuse"
         },
         {
           "dim": "z1",
           "size": 128,
           "relevant": false,
-          "reuse": "No Reuse"
+          "reuse": "Reuse"
         },
         {
           "dim": "z2",
@@ -60,19 +60,19 @@
       ]
     },
     "Transfer(input_1)__out1": {
-      "reuse_factor": 1,
+      "reuse_factor": 128,
       "loops": [
         {
           "dim": "z0",
           "size": 16,
           "relevant": true,
-          "reuse": "No Reuse"
+          "reuse": "Reuse"
         },
         {
           "dim": "z1",
           "size": 128,
           "relevant": false,
-          "reuse": "No Reuse"
+          "reuse": "Reuse"
         },
         {
           "dim": "z2",
@@ -106,7 +106,7 @@
           "dim": "z0",
           "size": 16,
           "relevant": true,
-          "reuse": "No Reuse"
+          "reuse": "Reuse"
         },
         {
           "dim": "z1",
@@ -266,30 +266,30 @@
       ]
     },
     "Transfer(weights_3_1)__out0": {
-      "reuse_factor": 1,
+      "reuse_factor": 4,
       "loops": [
         {
           "dim": "z3",
           "size": 16,
           "relevant": true,
-          "reuse": "No Reuse"
+          "reuse": "Reuse"
         },
         {
           "dim": "z1",
           "size": 128,
           "relevant": true,
-          "reuse": "No Reuse"
+          "reuse": "Reuse"
         },
         {
           "dim": "z2",
           "size": 4,
           "relevant": false,
-          "reuse": "No Reuse"
+          "reuse": "Reuse"
         }
       ]
     },
     "Transfer(output_1)__out0": {
-      "reuse_factor": 1,
+      "reuse_factor": 128,
       "loops": [
         {
           "dim": "z3",
@@ -301,7 +301,7 @@
           "dim": "z1",
           "size": 128,
           "relevant": false,
-          "reuse": "No Reuse"
+          "reuse": "Reuse"
         },
         {
           "dim": "z2",

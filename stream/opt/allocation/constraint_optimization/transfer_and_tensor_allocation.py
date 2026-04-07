@@ -1,6 +1,5 @@
 import math
 import os
-import yaml
 from collections import defaultdict
 from itertools import product as iproduct
 from math import ceil, prod
@@ -8,10 +7,12 @@ from typing import Any, TypeAlias
 
 import gurobipy as gp
 import matplotlib.pyplot as plt
+import yaml
 from gurobipy import GRB, quicksum
 
 from stream.cost_model.communication_manager import MulticastPathPlan
 from stream.cost_model.core_cost_lut import CoreCostLUT
+from stream.datatypes import LayerDim
 from stream.hardware.architecture.accelerator import Accelerator
 from stream.hardware.architecture.core import Core
 from stream.hardware.architecture.noc.communication_link import CommunicationLink
@@ -20,11 +21,10 @@ from stream.opt.allocation.constraint_optimization.context import (
     TransferAndTensorContext,
     build_transfer_context,
 )
-from stream.datatypes import LayerDim
-from stream.opt.search_space import SearchSpace
 from stream.opt.allocation.constraint_optimization.timeslot_allocation import (
     _resource_key,
 )
+from stream.opt.search_space import SearchSpace
 from stream.workload.node import HasOutputs, TransferType
 from stream.workload.steady_state.iteration_space import Reuse, SteadyStateIterationSpace
 from stream.workload.steady_state.node import Node
@@ -59,7 +59,7 @@ class TransferAndTensorAllocator:
     # False: count tensor-core occupancy separately for each transfer that uses it
     # True:  count tensor-core occupancy only once across all transfers
 
-    def __init__(  # noqa: PLR0913
+    def __init__(  # noqa: PLR0913, PLR0915
         self,
         workload: Workload,
         timeslots: dict[Node, int],
@@ -156,7 +156,7 @@ class TransferAndTensorAllocator:
         # Max coefficients per (t, stop) for big-M bounds
         self._ssis_max_coefficients: dict[tuple[Tensor, int], dict[str, int]] = {}
         self.transfer_nodes_to_optimize_firings_for: list[TransferNode] = []
-        self._init_transfer_fire_helpers()
+        self._classify_transfer_nodes_for_firing_optimization()
 
         # track optimization progress
         self.optimization_trace: list[dict[str, float | str | None]] = []
@@ -284,9 +284,7 @@ class TransferAndTensorAllocator:
         ssis_temporal_dims = set(self.ssis[tr].get_applicable_temporal_dimensions())
         return [d for d in self.search_space.dims() if d in ssis_temporal_dims]
 
-    def _ssis_coefficients_for_transfer(
-        self, tr: "TransferNode"
-    ) -> dict | None:
+    def _ssis_coefficients_for_transfer(self, tr: "TransferNode") -> dict | None:
         """Enumerate candidate-indexed SSIS coefficients for a transfer.
 
         Per D-04/D-08/D-09: for each joint candidate combination across the SSIS
@@ -305,7 +303,7 @@ class TransferAndTensorAllocator:
         Also populates self._ssis_max_coefficients[(t, stop)] with max values
         for big-M bounds.
         """
-        from stream.opt.tile_size_utils import reuse_coefficients_for_sizes
+        from stream.opt.tile_size_utils import reuse_coefficients_for_sizes  # noqa: PLC0415
 
         tiled_dims = self._ssis_tiled_dims_for_transfer(tr)
         if not tiled_dims:
@@ -339,7 +337,7 @@ class TransferAndTensorAllocator:
         for combo in iproduct(*option_lists):
             # Substitute candidate tile sizes into the sizes list
             substituted_sizes = list(sizes_base)
-            for (dim, _opts), opt in zip(per_dim_options, combo):
+            for (dim, _opts), opt in zip(per_dim_options, combo, strict=False):
                 if dim not in applicable_dims:
                     continue
                 idx = applicable_dims.index(dim)
@@ -351,9 +349,7 @@ class TransferAndTensorAllocator:
                 # Here we use T = workload_size / K since S is already captured
                 # in the kernel loop (KERNEL variable type); temporal T = workload_size / K
                 T, rem = divmod(workload_size, K)
-                assert rem == 0, (
-                    f"workload_size {workload_size} not divisible by K={K} for dim {dim}"
-                )
+                assert rem == 0, f"workload_size {workload_size} not divisible by K={K} for dim {dim}"
                 substituted_sizes[idx] = T
 
             fires_d, sf_d, tn_d, bn_d = reuse_coefficients_for_sizes(substituted_sizes, relevancies)
@@ -381,6 +377,18 @@ class TransferAndTensorAllocator:
 
         return result
 
+    def _classify_transfer_nodes_for_firing_optimization(self) -> None:
+        """Identify which transfer nodes need firing optimization.
+
+        Must run before _create_vars since __create_reuse_vars depends on
+        transfer_nodes_to_optimize_firings_for. Does NOT need self.w.
+        """
+        for tr in self.transfer_nodes:
+            reuses = [iv.reuse for iv in self.ssis[tr].get_applicable_temporal_variables()]
+            if any(r != Reuse.NOT_SET for r in reuses):
+                continue
+            self.transfer_nodes_to_optimize_firings_for.append(tr)
+
     def _init_transfer_fire_helpers(self) -> None:
         """Compute per-stop-level reuse coefficients for all transfer nodes.
 
@@ -393,17 +401,15 @@ class TransferAndTensorAllocator:
             reuse_levels[(t, stop)] = (fires, size_factor)  -- plain int tuple
             tiles_needed_levels[(t, stop)] = tiles_needed   -- plain int
             bds_needed_levels[(t, stop)] = bds_needed       -- plain int
-        """
-        from stream.opt.tile_size_utils import reuse_coefficients_for_sizes
 
-        for tr in self.transfer_nodes:
+        Must run after _create_vars since variable tile mode needs self.w.
+        """
+        from stream.opt.tile_size_utils import reuse_coefficients_for_sizes  # noqa: PLC0415
+
+        for tr in self.transfer_nodes_to_optimize_firings_for:
             applicable_vars = self.ssis[tr].get_applicable_temporal_variables()
             sizes = [iv.size for iv in applicable_vars]
             relevancies = [iv.relevant for iv in applicable_vars]
-            reuses = [iv.reuse for iv in applicable_vars]
-            if any(r != Reuse.NOT_SET for r in reuses):
-                continue
-            self.transfer_nodes_to_optimize_firings_for.append(tr)
 
             # Try variable tile mode
             coeff_dict = self._ssis_coefficients_for_transfer(tr)
@@ -417,9 +423,7 @@ class TransferAndTensorAllocator:
                         # reuse_levels: list of (fires_coeff, sf_coeff, joint_binary)
                         self.reuse_levels[(t, stop)] = [
                             (fires_c, sf_c, jw)
-                            for (fires_c, jw), (sf_c, _) in zip(
-                                entry["fires"], entry["size_factor"]
-                            )
+                            for (fires_c, jw), (sf_c, _) in zip(entry["fires"], entry["size_factor"], strict=False)
                         ]
                         self.tiles_needed_levels[(t, stop)] = list(entry["tiles_needed"])
                         self.bds_needed_levels[(t, stop)] = list(entry["bds_needed"])
@@ -671,6 +675,7 @@ class TransferAndTensorAllocator:
     # ------------------------------------------------------------ #
     def _build_model(self):
         self._create_vars()
+        self._init_transfer_fire_helpers()
         self._index_choice_metadata()
         self._create_constraints()
         self._overlap_and_objective()
@@ -718,23 +723,17 @@ class TransferAndTensorAllocator:
             return
         for dim in self.search_space.dims():
             options = self.search_space.get(dim)
-            for k, opt in enumerate(options):
-                self.w[(dim, k)] = self.model.addVar(
-                    vtype=GRB.BINARY, name=f"w_{dim}_{k}"
-                )
+            for k, _opt in enumerate(options):
+                self.w[(dim, k)] = self.model.addVar(vtype=GRB.BINARY, name=f"w_{dim}_{k}")
             # One-hot constraint (per D-02)
             self.model.addConstr(
                 quicksum(self.w[(dim, k)] for k in range(len(options))) == 1,
                 name=f"w_one_hot_{dim}",
             )
             # INTEGER tile_var (per D-01)
-            self.tile_var[dim] = self.model.addVar(
-                vtype=GRB.INTEGER, name=f"tile_var_{dim}"
-            )
+            self.tile_var[dim] = self.model.addVar(vtype=GRB.INTEGER, name=f"tile_var_{dim}")
             self.model.addConstr(
-                self.tile_var[dim] == quicksum(
-                    opt.tile * self.w[(dim, k)] for k, opt in enumerate(options)
-                ),
+                self.tile_var[dim] == quicksum(opt.tile * self.w[(dim, k)] for k, opt in enumerate(options)),
                 name=f"tile_var_def_{dim}",
             )
 
@@ -796,7 +795,9 @@ class TransferAndTensorAllocator:
                     fires_expr = quicksum(fc * jw for fc, _, jw in rl_s)
                     M = self._ssis_max_coefficients[(t, s)]["fires"]
                     lc = self.model.addVar(
-                        vtype=GRB.CONTINUOUS, lb=0, ub=M,
+                        vtype=GRB.CONTINUOUS,
+                        lb=0,
+                        ub=M,
                         name=f"fire_lc_{tr.name}_L{s}",
                     )
                     self.model.addConstr(lc <= fires_expr, name=f"fire_lc_ub_expr_{tr.name}_L{s}")
@@ -837,7 +838,9 @@ class TransferAndTensorAllocator:
                     sf_expr = quicksum(sf_c * jw for _, sf_c, jw in rl_s)
                     M = self._ssis_max_coefficients[(t, s)]["size_factor"]
                     lc = self.model.addVar(
-                        vtype=GRB.CONTINUOUS, lb=0, ub=M,
+                        vtype=GRB.CONTINUOUS,
+                        lb=0,
+                        ub=M,
                         name=f"rf_lc_{tr.name}_L{s}",
                     )
                     self.model.addConstr(lc <= sf_expr, name=f"rf_lc_ub_expr_{tr.name}_L{s}")
@@ -947,7 +950,7 @@ class TransferAndTensorAllocator:
             self.model.addConstr(quicksum(vars_) <= 1, name=f"link_usage_{_resource_key(link)}_{s}")
 
     # ...................... memory capacity .................... #
-    def _memory_capacity_constraints(self):
+    def _memory_capacity_constraints(self):  # noqa: PLR0912, PLR0915
         """Memory capacity constraints.
 
         When search_space is set, uses continuous auxiliary load_contrib
@@ -958,9 +961,7 @@ class TransferAndTensorAllocator:
         When search_space is None, falls back to the original scalar path.
         """
         self.core_load: dict[Core, gp.LinExpr] = defaultdict(gp.LinExpr)
-        use_variable_tiles = (
-            self.search_space is not None and not self.search_space.is_empty()
-        )
+        use_variable_tiles = self.search_space is not None and not self.search_space.is_empty()
 
         for tr in self.transfer_nodes:
             for t in tr.outputs:
@@ -974,32 +975,101 @@ class TransferAndTensorAllocator:
 
                 # Determine scalar fallback size (needed when joint_candidates is empty)
                 if not joint_candidates:
-                    tensor_size = self.workload.get_tensor_of_transfer_to_single_core(
-                        t, tr, self.mapping
-                    ).size_bits()
+                    tensor_size = self.workload.get_tensor_of_transfer_to_single_core(t, tr, self.mapping).size_bits()
 
                 for c in candidate_cores:
                     assert isinstance(c, Core)
                     u = self._tensor_uses_core_var(t, c)
 
                     for stop in range(-1, len(self.ssis[tr].get_applicable_temporal_variables())):
-                        _, size_factor = self.reuse_levels[(t, stop)]
+                        rl = self.reuse_levels[(t, stop)]
                         uz = self._add_binary_product(
                             a=u,
                             b=self.z_stop[(t, stop)],
                             base_name=f"memload_{t.name}_{_resource_key(c)}_L{stop}",
                         )
 
-                        if joint_candidates:
-                            # --- Variable tile path (D-05) ---
+                        if isinstance(rl, list):
+                            # --- Variable tile mode: size_factor varies per SSIS candidate ---
+                            if joint_candidates:
+                                # Both size_factor and tensor_size vary per candidate.
+                                # Enumerate all (ssis_candidate, tensor_candidate) pairs.
+                                # For each pair, memory = ceil(sf_c * sz) * (jw_ssis AND jw_tensor) * uz.
+                                # Build a combined tile_expr over all pairs.
+                                sf_max = self._ssis_max_coefficients[(t, stop)]["size_factor"]
+                                tensor_max = self._tensor_max_size[t]
+                                M = ceil(sf_max * tensor_max)
+
+                                combined_terms = gp.LinExpr()
+                                for _, sf_c, jw_ssis in rl:
+                                    for sz, jw_tensor in joint_candidates:
+                                        coeff = ceil(sf_c * sz)
+                                        if coeff == 0:
+                                            continue
+                                        if jw_ssis is jw_tensor:
+                                            combined_terms += coeff * jw_ssis
+                                        else:
+                                            jw_pair = self._add_binary_product(
+                                                a=jw_ssis,
+                                                b=jw_tensor,
+                                                base_name=f"mem_sftile_{t.name}_{_resource_key(c)}_L{stop}_{id(jw_ssis)}_{id(jw_tensor)}",
+                                            )
+                                            combined_terms += coeff * jw_pair
+
+                                lc = self.model.addVar(
+                                    vtype=GRB.CONTINUOUS,
+                                    lb=0,
+                                    ub=M,
+                                    name=f"lc_{t.name}_{_resource_key(c)}_L{stop}",
+                                )
+                                self.model.addConstr(
+                                    lc <= combined_terms,
+                                    name=f"lc_ub_expr_{t.name}_{_resource_key(c)}_L{stop}",
+                                )
+                                self.model.addConstr(
+                                    lc <= M * uz,
+                                    name=f"lc_ub_m_{t.name}_{_resource_key(c)}_L{stop}",
+                                )
+                                self.model.addConstr(
+                                    lc >= combined_terms - M * (1 - uz),
+                                    name=f"lc_lb_{t.name}_{_resource_key(c)}_L{stop}",
+                                )
+                                self.core_load[c] += lc
+                            else:
+                                # Size_factor varies but tensor_size is scalar.
+                                # memory = sf_expr * tensor_size * uz
+                                sf_max = self._ssis_max_coefficients[(t, stop)]["size_factor"]
+                                M = ceil(sf_max * tensor_size)
+
+                                sf_scaled_expr = quicksum(ceil(sf_c * tensor_size) * jw for _, sf_c, jw in rl)
+
+                                lc = self.model.addVar(
+                                    vtype=GRB.CONTINUOUS,
+                                    lb=0,
+                                    ub=M,
+                                    name=f"lc_{t.name}_{_resource_key(c)}_L{stop}",
+                                )
+                                self.model.addConstr(
+                                    lc <= sf_scaled_expr,
+                                    name=f"lc_ub_expr_{t.name}_{_resource_key(c)}_L{stop}",
+                                )
+                                self.model.addConstr(
+                                    lc <= M * uz,
+                                    name=f"lc_ub_m_{t.name}_{_resource_key(c)}_L{stop}",
+                                )
+                                self.model.addConstr(
+                                    lc >= sf_scaled_expr - M * (1 - uz),
+                                    name=f"lc_lb_{t.name}_{_resource_key(c)}_L{stop}",
+                                )
+                                self.core_load[c] += lc
+                        elif joint_candidates:
+                            # --- Variable tile path (D-05), scalar size_factor ---
+                            _, size_factor = rl
                             tensor_max = self._tensor_max_size[t]
                             M = ceil(size_factor * tensor_max)
 
                             # Tile-dependent size expression
-                            tile_expr = quicksum(
-                                ceil(size_factor * sz) * jw
-                                for sz, jw in joint_candidates
-                            )
+                            tile_expr = quicksum(ceil(size_factor * sz) * jw for sz, jw in joint_candidates)
 
                             # Continuous auxiliary: load_contrib
                             lc = self.model.addVar(
@@ -1024,6 +1094,7 @@ class TransferAndTensorAllocator:
                             self.core_load[c] += lc
                         else:
                             # --- Scalar fallback path (original behavior) ---
+                            _, size_factor = rl
                             req_size = ceil(size_factor * tensor_size)
                             self.core_load[c] += req_size * uz
 
@@ -1056,7 +1127,9 @@ class TransferAndTensorAllocator:
                             tiles_expr_with_db = tiles_needed_expr + db_offset
                             M = self._ssis_max_coefficients[(t, stop)]["tiles_needed"] + db_offset
                             lc = self.model.addVar(
-                                vtype=GRB.CONTINUOUS, lb=0, ub=M,
+                                vtype=GRB.CONTINUOUS,
+                                lb=0,
+                                ub=M,
                                 name=f"fifo_lc_{t.name}_{_resource_key(c)}_L{stop}",
                             )
                             self.model.addConstr(
@@ -1111,7 +1184,9 @@ class TransferAndTensorAllocator:
                             factor_expr = quicksum(fk * jw for fk, jw in factor)
                             M = self._ssis_max_coefficients[(t, stop)][max_key]
                             lc = self.model.addVar(
-                                vtype=GRB.CONTINUOUS, lb=0, ub=M,
+                                vtype=GRB.CONTINUOUS,
+                                lb=0,
+                                ub=M,
                                 name=f"bd_lc_{t.name}_{_resource_key(c)}_L{stop}",
                             )
                             self.model.addConstr(
@@ -1735,15 +1810,13 @@ class TransferAndTensorAllocator:
         succ_list = list(self.workload.successors(tr))
         succ_idx = tr.outputs.index(tensor) if len(succ_list) > 1 else 0
         succ_node = succ_list[succ_idx]
-        if isinstance(succ_node, (InEdge, OutEdge)):
+        if isinstance(succ_node, InEdge | OutEdge):
             return []
         succ_tiling = self.workload.get_unique_dims_inter_core_tiling(succ_node, self.mapping)
         tiling_dims = {d for d, _ in succ_tiling}
         return [d for d in self.search_space.dims() if d in tiling_dims]
 
-    def _joint_candidates_for_tensor(
-        self, tensor: Tensor, tr: TransferNode
-    ) -> list[tuple[int, gp.Var]]:
+    def _joint_candidates_for_tensor(self, tensor: Tensor, tr: TransferNode) -> list[tuple[int, gp.Var]]:
         """Enumerate joint candidate combinations for a tensor's tiled dimensions.
 
         Returns list of (size_bits, joint_binary_var) pairs.
@@ -1761,7 +1834,7 @@ class TransferAndTensorAllocator:
             succ_list = list(self.workload.successors(tr))
             succ_idx = tr.outputs.index(tensor) if len(succ_list) > 1 else 0
             succ_node = succ_list[succ_idx]
-            if not isinstance(succ_node, (InEdge, OutEdge)):
+            if not isinstance(succ_node, InEdge | OutEdge):
                 succ_tiling = self.workload.get_unique_dims_inter_core_tiling(succ_node, self.mapping)
             shape = self.workload.get_tensor_shape_with_tiling(tensor, succ_tiling)
             size = tensor.size_bits(shape=shape)
@@ -1769,19 +1842,15 @@ class TransferAndTensorAllocator:
             self._tensor_joint_candidates[tensor] = []
             return []
 
-        per_dim_options = [
-            (dim, self.search_space.get(dim)) for dim in tiled_dims
-        ]
+        per_dim_options = [(dim, self.search_space.get(dim)) for dim in tiled_dims]
         # Get the base inter-core tiling from successor
         succ_list = list(self.workload.successors(tr))
         succ_idx = tr.outputs.index(tensor) if len(succ_list) > 1 else 0
         succ_node = succ_list[succ_idx]
-        if isinstance(succ_node, (InEdge, OutEdge)):
+        if isinstance(succ_node, InEdge | OutEdge):
             base_tiling: list = []
         else:
-            base_tiling = list(self.workload.get_unique_dims_inter_core_tiling(
-                succ_node, self.mapping
-            ))
+            base_tiling = list(self.workload.get_unique_dims_inter_core_tiling(succ_node, self.mapping))
 
         joint_results: list[tuple[int, gp.Var]] = []
         max_size = 0
@@ -1791,7 +1860,7 @@ class TransferAndTensorAllocator:
             # combo: tuple[TileSizeOption, ...] one per tiled dim
             # Build tiling with candidate tiles substituted
             current_tiling = list(base_tiling)
-            for (dim, _opts), opt in zip(per_dim_options, combo):
+            for (dim, _opts), opt in zip(per_dim_options, combo, strict=False):
                 wdim_size = self.workload.get_dimension_size(dim)
                 new_factor = wdim_size // opt.tile
                 replaced = False
@@ -1803,9 +1872,7 @@ class TransferAndTensorAllocator:
                 if not replaced:
                     current_tiling.append((dim, new_factor))
 
-            shape = self.workload.get_tensor_shape_with_tiling(
-                tensor, tuple(current_tiling)
-            )
+            shape = self.workload.get_tensor_shape_with_tiling(tensor, tuple(current_tiling))
             size = tensor.size_bits(shape=shape)
             max_size = max(max_size, size)
 
@@ -1832,7 +1899,7 @@ class TransferAndTensorAllocator:
         base_name : str prefix for the auxiliary AND variable names (default "jw")
         """
         binaries = []
-        for (dim, opts), opt in zip(per_dim_options, combo):
+        for (dim, opts), opt in zip(per_dim_options, combo, strict=False):
             k = opts.index(opt)
             binaries.append(self.w[(dim, k)])
 
@@ -1844,10 +1911,11 @@ class TransferAndTensorAllocator:
         for i, b in enumerate(binaries[1:], start=1):
             dim_names = "_".join(
                 f"{dim}_{opts.index(opt)}"
-                for (dim, opts), opt in zip(per_dim_options[:i + 1], combo[:i + 1])
+                for (dim, opts), opt in zip(per_dim_options[: i + 1], combo[: i + 1], strict=False)
             )
             result = self._add_binary_product(
-                a=result, b=b,
+                a=result,
+                b=b,
                 base_name=f"{base_name}_{dim_names}",
             )
         return result
