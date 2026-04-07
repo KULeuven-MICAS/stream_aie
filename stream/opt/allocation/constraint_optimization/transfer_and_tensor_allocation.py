@@ -756,25 +756,84 @@ class TransferAndTensorAllocator:
 
     # ...................... memory capacity .................... #
     def _memory_capacity_constraints(self):
+        """Memory capacity constraints.
+
+        When search_space is set, uses continuous auxiliary load_contrib
+        variables with big-M activation for the triple product
+        u * z_stop * tile_size_expr (D-05). Big-M bounds are tight
+        per-constraint max over joint candidate tensor sizes (D-06/D-07).
+
+        When search_space is None, falls back to the original scalar path.
+        """
         self.core_load: dict[Core, gp.LinExpr] = defaultdict(gp.LinExpr)
-        # Transfer output tensors on their chosen compute/memory cores
+        use_variable_tiles = (
+            self.search_space is not None and not self.search_space.is_empty()
+        )
+
         for tr in self.transfer_nodes:
             for t in tr.outputs:
                 assert isinstance(t, Tensor), f"Expected transfer output {t} to be a Tensor."
-                tensor_size = self.workload.get_tensor_of_transfer_to_single_core(t, tr, self.mapping).size_bits()
                 candidate_cores = self._candidate_cores_for_tensor(t)
+
+                if use_variable_tiles:
+                    joint_candidates = self._joint_candidates_for_tensor(t, tr)
+                else:
+                    joint_candidates = []
+
+                # Determine scalar fallback size (needed when joint_candidates is empty)
+                if not joint_candidates:
+                    tensor_size = self.workload.get_tensor_of_transfer_to_single_core(
+                        t, tr, self.mapping
+                    ).size_bits()
+
                 for c in candidate_cores:
                     assert isinstance(c, Core)
                     u = self._tensor_uses_core_var(t, c)
+
                     for stop in range(-1, len(self.ssis[tr].get_applicable_temporal_variables())):
                         _, size_factor = self.reuse_levels[(t, stop)]
-                        req_size = ceil(size_factor * tensor_size)
                         uz = self._add_binary_product(
                             a=u,
                             b=self.z_stop[(t, stop)],
                             base_name=f"memload_{t.name}_{_resource_key(c)}_L{stop}",
                         )
-                        self.core_load[c] += req_size * uz
+
+                        if joint_candidates:
+                            # --- Variable tile path (D-05) ---
+                            tensor_max = self._tensor_max_size[t]
+                            M = ceil(size_factor * tensor_max)
+
+                            # Tile-dependent size expression
+                            tile_expr = quicksum(
+                                ceil(size_factor * sz) * jw
+                                for sz, jw in joint_candidates
+                            )
+
+                            # Continuous auxiliary: load_contrib
+                            lc = self.model.addVar(
+                                vtype=GRB.CONTINUOUS,
+                                lb=0,
+                                ub=M,
+                                name=f"lc_{t.name}_{_resource_key(c)}_L{stop}",
+                            )
+                            # big-M activation: lc == tile_expr when uz == 1, else lc == 0
+                            self.model.addConstr(
+                                lc <= tile_expr,
+                                name=f"lc_ub_expr_{t.name}_{_resource_key(c)}_L{stop}",
+                            )
+                            self.model.addConstr(
+                                lc <= M * uz,
+                                name=f"lc_ub_m_{t.name}_{_resource_key(c)}_L{stop}",
+                            )
+                            self.model.addConstr(
+                                lc >= tile_expr - M * (1 - uz),
+                                name=f"lc_lb_{t.name}_{_resource_key(c)}_L{stop}",
+                            )
+                            self.core_load[c] += lc
+                        else:
+                            # --- Scalar fallback path (original behavior) ---
+                            req_size = ceil(size_factor * tensor_size)
+                            self.core_load[c] += req_size * uz
 
         for c, expr in self.core_load.items():
             cap = c.get_memory_capacity()
