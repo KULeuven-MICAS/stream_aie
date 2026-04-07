@@ -74,7 +74,7 @@ Plans:
   3. The regression test passes with a single-candidate degenerate input after SSIS changes
 **Plans**: 2 plans
 Plans:
-- [ ] 04-01-PLAN.md — SSIS utility functions, _ssis_coefficients_for_transfer helper, refactored _init_transfer_fire_helpers
+- [x] 04-01-PLAN.md — SSIS utility functions, _ssis_coefficients_for_transfer helper, refactored _init_transfer_fire_helpers
 - [ ] 04-02-PLAN.md — Linearize fire rate, reuse factor, FIFO depth, and buffer descriptor constraints
 
 ### Phase 5: Variable Transfer Latency
@@ -109,6 +109,6 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6
 | 1. Baseline Validation | 0/2 | Planning complete | - |
 | 2. TileSizeLUT Infrastructure | 0/2 | Planning complete | - |
 | 3. Tile Selection Variables + Memory Constraints | 2/3 | In Progress|  |
-| 4. Variable SSIS + FIFO Constraints | 0/2 | Planning complete | - |
+| 4. Variable SSIS + FIFO Constraints | 1/2 | In Progress|  |
 | 5. Variable Transfer Latency | 0/? | Not started | - |
 | 6. Pipeline Integration + E2E Validation | 0/? | Not started | - |

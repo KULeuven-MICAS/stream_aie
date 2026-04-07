@@ -23,7 +23,7 @@ Requirements for variable tile size optimization milestone. Each maps to roadmap
 ### CO Variable Integration
 
 - [x] **CO-01**: Tensor sizes in memory capacity constraints become linear expressions over tile selection variables using TileSizeLUT coefficients
-- [ ] **CO-02**: SSIS loop sizes (kernel and temporal) become linear expressions over tile selection variables, updating reuse_levels, fire counts, and buffer depth constraints
+- [x] **CO-02**: SSIS loop sizes (kernel and temporal) become linear expressions over tile selection variables, updating reuse_levels, fire counts, and buffer depth constraints
 - [ ] **CO-03**: Transfer sizes and latencies become linear expressions over tile selection variables
 - [ ] **CO-04**: Object FIFO depth constraints use variable tile-dependent sizes
 - [x] **CO-05**: Big-M bounds are computed per-constraint using tight LUT-derived upper bounds (not the existing scalar big_m)
@@ -68,7 +68,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | TILE-05 | Phases 3-5 | Complete |
 | CO-01 | Phase 3 | Complete |
 | CO-05 | Phase 3 | Complete |
-| CO-02 | Phase 4 | Pending |
+| CO-02 | Phase 4 | Complete |
 | CO-04 | Phase 4 | Pending |
 | CO-03 | Phase 5 | Pending |
 | PIPE-01 | Phase 6 | Pending |
