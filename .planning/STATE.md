@@ -3,8 +3,8 @@ gsd_state_version: 1.0
 milestone: v2.0
 milestone_name: milestone
 status: executing
-stopped_at: Completed 03-02-PLAN.md
-last_updated: "2026-04-07T09:56:27.991Z"
+stopped_at: Completed 03-03-PLAN.md
+last_updated: "2026-04-07T10:06:06.149Z"
 last_activity: 2026-04-07
 progress:
   total_phases: 6
@@ -26,7 +26,7 @@ See: .planning/PROJECT.md (updated 2026-04-02)
 ## Current Position
 
 Phase: 03 (tile-selection-variables-memory-constraints) — EXECUTING
-Plan: 2 of 3
+Plan: 3 of 3
 Status: Ready to execute
 Last activity: 2026-04-07
 
@@ -54,6 +54,7 @@ Progress: [░░░░░░░░░░] 0%
 *Updated after each plan completion*
 | Phase 01-baseline-validation P01 | 4 | 3 tasks | 8 files |
 | Phase 03-tile-selection-variables-memory-constraints P02 | 6 | 2 tasks | 2 files |
+| Phase 03-tile-selection-variables-memory-constraints P03 | 15 | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -67,6 +68,7 @@ Recent decisions affecting current work:
 - [Phase 01-baseline-validation]: MappingValidator accepts either tile or tile_options per entry for backward compatibility
 - [Phase 03-tile-selection-variables-memory-constraints]: Test private methods via types.SimpleNamespace + __get__ binding avoids constructing real TransferAndTensorAllocator
 - [Phase 03-tile-selection-variables-memory-constraints]: _joint_candidates_for_tensor returns empty list to signal scalar fallback path to Plan 03 memory constraints
+- [Phase 03-tile-selection-variables-memory-constraints]: Continuous auxiliary lc vars linearize triple product u*z_stop*tile_size_expr with tight big-M = ceil(size_factor * tensor_max) bounds
 
 ### Pending Todos
 
@@ -80,6 +82,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-04-07T09:56:27.988Z
-Stopped at: Completed 03-02-PLAN.md
+Last session: 2026-04-07T10:06:06.146Z
+Stopped at: Completed 03-03-PLAN.md
 Resume file: None
