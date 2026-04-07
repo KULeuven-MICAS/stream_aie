@@ -6,8 +6,10 @@ from stream.datatypes import LayerDim
 from stream.opt.search_space import SearchSpace, TileSizeOption
 from stream.opt.tile_size_utils import (
     is_divisible_candidate,
+    max_tensor_size_bits,
     passes_single_tensor_memory_check,
     tensor_size_bits,
+    tensor_size_bits_for_candidate,
 )
 
 # --- SearchSpace and TileSizeOption tests ---
@@ -173,3 +175,137 @@ def test_passes_single_tensor_memory_check_one_exceeds():
     t2.size_bits.return_value = 1_500_000  # exceeds capacity
 
     assert passes_single_tensor_memory_check(workload, mapping, node, core) is False
+
+
+# --- tensor_size_bits_for_candidate tests ---
+
+
+def test_tensor_size_bits_for_candidate_single_dim():
+    """candidate_tile replaces the factor for dim in base_inter_core_tiling."""
+    d = _dim(0)
+    workload = MagicMock()
+    tensor = MagicMock()
+
+    # workload_size=256, candidate_tile=16 → new_factor = 256 // 16 = 16
+    workload.get_dimension_size.return_value = 256
+    expected_shape = (16, 64)
+    expected_bits = 16 * 16 * 64  # bitwidth * prod(shape)
+    workload.get_tensor_shape_with_tiling.return_value = expected_shape
+    tensor.size_bits.return_value = expected_bits
+
+    base_tiling = ((d, 4),)  # original factor 4, will be replaced with 16
+    result = tensor_size_bits_for_candidate(workload, tensor, base_tiling, d, 16)
+
+    # Verify new factor was computed: 256 // 16 = 16
+    workload.get_dimension_size.assert_called_once_with(d)
+    # Verify get_tensor_shape_with_tiling was called with updated tiling
+    call_args = workload.get_tensor_shape_with_tiling.call_args
+    called_tiling = call_args[0][1]
+    # The tiling should have d mapped to factor 16
+    tiling_dict = dict(called_tiling)
+    assert tiling_dict[d] == 16
+    assert result == expected_bits
+
+
+def test_tensor_size_bits_for_candidate_dim_not_in_base():
+    """When dim is NOT in base_inter_core_tiling, the function appends it."""
+    d0 = _dim(0)
+    d1 = _dim(1)
+    workload = MagicMock()
+    tensor = MagicMock()
+
+    workload.get_dimension_size.return_value = 128
+    workload.get_tensor_shape_with_tiling.return_value = (8, 32)
+    tensor.size_bits.return_value = 8 * 32 * 16
+
+    # base_tiling does NOT contain d1
+    base_tiling = ((d0, 4),)
+    tensor_size_bits_for_candidate(workload, tensor, base_tiling, d1, 16)
+
+    call_args = workload.get_tensor_shape_with_tiling.call_args
+    called_tiling = call_args[0][1]
+    tiling_dict = dict(called_tiling)
+    # d1 should have been appended with factor 128 // 16 = 8
+    assert d1 in tiling_dict
+    assert tiling_dict[d1] == 8
+    # d0 should remain unchanged
+    assert tiling_dict[d0] == 4
+
+
+def test_max_tensor_size_bits_single_dim():
+    """Returns the maximum size across candidates [16, 32, 64] for one dim."""
+    d = _dim(0)
+    workload = MagicMock()
+    tensor = MagicMock()
+
+    # Size grows as tile shrinks (more splits → smaller slices), but here we want
+    # to verify max is returned regardless of ordering.
+    # Tile 16 → factor 16 → large shape → size 3000
+    # Tile 32 → factor 8  → medium shape → size 2000
+    # Tile 64 → factor 4  → small shape  → size 1000
+    workload.get_dimension_size.return_value = 256
+
+    def shape_side_effect(t, tiling):
+        tiling_dict = dict(tiling)
+        factor = tiling_dict.get(d, 1)
+        # factor 16 → size 3000, factor 8 → 2000, factor 4 → 1000
+        return (factor * 100,)
+
+    workload.get_tensor_shape_with_tiling.side_effect = shape_side_effect
+
+    def size_bits_side_effect(shape):
+        return shape[0] * 10
+
+    tensor.size_bits.side_effect = lambda shape: shape[0] * 10
+
+    candidates_per_dim = {d: [16, 32, 64]}
+    result = max_tensor_size_bits(workload, tensor, (), candidates_per_dim)
+
+    # Tile 16 → factor 16 → shape (1600,) → size 16000
+    # Tile 32 → factor 8  → shape (800,)  → size 8000
+    # Tile 64 → factor 4  → shape (400,)  → size 4000
+    assert result == 16000
+
+
+def test_max_tensor_size_bits_multi_dim():
+    """Returns the max over Cartesian product for 2 dims."""
+    d0 = _dim(0)
+    d1 = _dim(1)
+    workload = MagicMock()
+    tensor = MagicMock()
+
+    workload.get_dimension_size.return_value = 256
+
+    def shape_side_effect(t, tiling):
+        tiling_dict = dict(tiling)
+        f0 = tiling_dict.get(d0, 1)
+        f1 = tiling_dict.get(d1, 1)
+        return (f0, f1)
+
+    workload.get_tensor_shape_with_tiling.side_effect = shape_side_effect
+    tensor.size_bits.side_effect = lambda shape: shape[0] * shape[1]
+
+    # d0 candidates: [16, 32] → factors [16, 8]
+    # d1 candidates: [16, 64] → factors [16, 4]
+    # max product of factors: 16*16 = 256
+    candidates_per_dim = {d0: [16, 32], d1: [16, 64]}
+    result = max_tensor_size_bits(workload, tensor, (), candidates_per_dim)
+    assert result == 256
+
+
+def test_max_tensor_size_bits_empty_candidates():
+    """When candidates_per_dim is empty, returns the base tensor_size_bits."""
+    d = _dim(0)
+    workload = MagicMock()
+    tensor = MagicMock()
+
+    base_tiling = ((d, 4),)
+    workload.get_tensor_shape_with_tiling.return_value = (64, 128)
+    tensor.size_bits.return_value = 8192
+
+    result = max_tensor_size_bits(workload, tensor, base_tiling, {})
+
+    # Should fall back to tensor_size_bits(workload, tensor, base_tiling)
+    workload.get_tensor_shape_with_tiling.assert_called_once_with(tensor, base_tiling)
+    tensor.size_bits.assert_called_once_with(shape=(64, 128))
+    assert result == 8192
