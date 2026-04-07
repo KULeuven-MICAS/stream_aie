@@ -2,6 +2,7 @@ import math
 import os
 import yaml
 from collections import defaultdict
+from itertools import product as iproduct
 from math import ceil, prod
 from typing import Any, TypeAlias
 
@@ -19,6 +20,7 @@ from stream.opt.allocation.constraint_optimization.context import (
     TransferAndTensorContext,
     build_transfer_context,
 )
+from stream.datatypes import LayerDim
 from stream.opt.search_space import SearchSpace
 from stream.opt.allocation.constraint_optimization.timeslot_allocation import (
     _resource_key,
@@ -89,6 +91,12 @@ class TransferAndTensorAllocator:
         self.cost_lut = cost_lut
         self.output_path = output_path
         self.search_space = search_space
+
+        # tile selection vars (populated in __create_tile_selection_vars if search_space is set)
+        self.w: dict[tuple[LayerDim, int], gp.Var] = {}
+        self.tile_var: dict[LayerDim, gp.Var] = {}
+        self._tensor_max_size: dict[Tensor, int] = {}
+        self._tensor_joint_candidates: dict[Tensor, list[tuple[int, gp.Var]]] = {}
 
         self.max_slot = max(timeslots.values()) if timeslots else 0
         self.big_m = big_m or len(workload.nodes()) + 5
@@ -525,6 +533,7 @@ class TransferAndTensorAllocator:
         self.__create_transfer_path_vars()
         self.__create_reuse_vars()
         self.__create_slot_latency_vars()
+        self.__create_tile_selection_vars()
 
     def __create_slot_latency_vars(self):
         for s in range(self.max_slot + 1):
@@ -554,6 +563,32 @@ class TransferAndTensorAllocator:
                         self.z_stop[(t, stop)] == 1,
                         name=f"zStop_FixedStop_{tr.name}_L{stop}",
                     )
+
+    def __create_tile_selection_vars(self):
+        """Create w[dim,k] binary and tile_var[dim] INTEGER variables (D-01/D-02)."""
+        if self.search_space is None or self.search_space.is_empty():
+            return
+        for dim in self.search_space.dims():
+            options = self.search_space.get(dim)
+            for k, opt in enumerate(options):
+                self.w[(dim, k)] = self.model.addVar(
+                    vtype=GRB.BINARY, name=f"w_{dim}_{k}"
+                )
+            # One-hot constraint (per D-02)
+            self.model.addConstr(
+                quicksum(self.w[(dim, k)] for k in range(len(options))) == 1,
+                name=f"w_one_hot_{dim}",
+            )
+            # INTEGER tile_var (per D-01)
+            self.tile_var[dim] = self.model.addVar(
+                vtype=GRB.INTEGER, name=f"tile_var_{dim}"
+            )
+            self.model.addConstr(
+                self.tile_var[dim] == quicksum(
+                    opt.tile * self.w[(dim, k)] for k, opt in enumerate(options)
+                ),
+                name=f"tile_var_def_{dim}",
+            )
 
     def __create_transfer_path_vars(self):
         for tr in self.transfer_nodes:
@@ -1386,6 +1421,127 @@ class TransferAndTensorAllocator:
         self.model.addConstr(w <= b, name=f"{n}__ub2")
         self.model.addConstr(w >= a + b - 1, name=f"{n}__lb")
         return w
+
+    def _tiled_dims_for_tensor(self, tensor: Tensor, tr: TransferNode) -> list[LayerDim]:
+        """Return SearchSpace dims that affect tensor's size via inter-core tiling.
+
+        A dim affects the tensor if it appears in the successor's inter_core_tiling.
+        Conservative: includes all search_space dims that appear in the
+        successor node's unique_dims_inter_core_tiling.
+        """
+        if self.search_space is None or self.search_space.is_empty():
+            return []
+        succ_list = list(self.workload.successors(tr))
+        succ_idx = tr.outputs.index(tensor) if len(succ_list) > 1 else 0
+        succ_node = succ_list[succ_idx]
+        if isinstance(succ_node, (InEdge, OutEdge)):
+            return []
+        succ_tiling = self.workload.get_unique_dims_inter_core_tiling(succ_node, self.mapping)
+        tiling_dims = {d for d, _ in succ_tiling}
+        return [d for d in self.search_space.dims() if d in tiling_dims]
+
+    def _joint_candidates_for_tensor(
+        self, tensor: Tensor, tr: TransferNode
+    ) -> list[tuple[int, gp.Var]]:
+        """Enumerate joint candidate combinations for a tensor's tiled dimensions.
+
+        Returns list of (size_bits, joint_binary_var) pairs.
+        Sets self._tensor_max_size[tensor] as a side-effect (D-07).
+        Uses itertools.product for arbitrary dimensionality (D-04).
+        """
+        if tensor in self._tensor_joint_candidates:
+            return self._tensor_joint_candidates[tensor]
+
+        tiled_dims = self._tiled_dims_for_tensor(tensor, tr)
+
+        if not tiled_dims or self.search_space is None:
+            # No tiled dims or no search space: fall back to scalar size
+            succ_tiling = ()
+            succ_list = list(self.workload.successors(tr))
+            succ_idx = tr.outputs.index(tensor) if len(succ_list) > 1 else 0
+            succ_node = succ_list[succ_idx]
+            if not isinstance(succ_node, (InEdge, OutEdge)):
+                succ_tiling = self.workload.get_unique_dims_inter_core_tiling(succ_node, self.mapping)
+            shape = self.workload.get_tensor_shape_with_tiling(tensor, succ_tiling)
+            size = tensor.size_bits(shape=shape)
+            self._tensor_max_size[tensor] = size
+            self._tensor_joint_candidates[tensor] = []
+            return []
+
+        per_dim_options = [
+            (dim, self.search_space.get(dim)) for dim in tiled_dims
+        ]
+        # Get the base inter-core tiling from successor
+        succ_list = list(self.workload.successors(tr))
+        succ_idx = tr.outputs.index(tensor) if len(succ_list) > 1 else 0
+        succ_node = succ_list[succ_idx]
+        if isinstance(succ_node, (InEdge, OutEdge)):
+            base_tiling: list = []
+        else:
+            base_tiling = list(self.workload.get_unique_dims_inter_core_tiling(
+                succ_node, self.mapping
+            ))
+
+        joint_results: list[tuple[int, gp.Var]] = []
+        max_size = 0
+
+        option_lists = [opts for _, opts in per_dim_options]
+        for combo in iproduct(*option_lists):
+            # combo: tuple[TileSizeOption, ...] one per tiled dim
+            # Build tiling with candidate tiles substituted
+            current_tiling = list(base_tiling)
+            for (dim, _opts), opt in zip(per_dim_options, combo):
+                wdim_size = self.workload.get_dimension_size(dim)
+                new_factor = wdim_size // opt.tile
+                replaced = False
+                for i, (td, _) in enumerate(current_tiling):
+                    if td == dim:
+                        current_tiling[i] = (dim, new_factor)
+                        replaced = True
+                        break
+                if not replaced:
+                    current_tiling.append((dim, new_factor))
+
+            shape = self.workload.get_tensor_shape_with_tiling(
+                tensor, tuple(current_tiling)
+            )
+            size = tensor.size_bits(shape=shape)
+            max_size = max(max_size, size)
+
+            # Joint binary: product of w[dim, k] for each dim in combo
+            joint_w = self._joint_binary_for_combo(per_dim_options, combo)
+            joint_results.append((size, joint_w))
+
+        self._tensor_max_size[tensor] = max_size
+        self._tensor_joint_candidates[tensor] = joint_results
+        return joint_results
+
+    def _joint_binary_for_combo(
+        self,
+        per_dim_options: list[tuple[LayerDim, list]],
+        combo: tuple,
+    ) -> gp.Var:
+        """Recursively AND w[dim,k] variables for this joint combination (D-03)."""
+        binaries = []
+        for (dim, opts), opt in zip(per_dim_options, combo):
+            k = opts.index(opt)
+            binaries.append(self.w[(dim, k)])
+
+        if len(binaries) == 1:
+            return binaries[0]
+
+        # Reduce: fold _add_binary_product over list
+        result = binaries[0]
+        for i, b in enumerate(binaries[1:], start=1):
+            dim_names = "_".join(
+                f"{dim}_{opts.index(opt)}"
+                for (dim, opts), opt in zip(per_dim_options[:i + 1], combo[:i + 1])
+            )
+            result = self._add_binary_product(
+                a=result, b=b,
+                base_name=f"jw_{dim_names}",
+            )
+        return result
 
     def _active_transfer_latency(
         self,
