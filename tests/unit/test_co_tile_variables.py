@@ -620,3 +620,293 @@ def test_single_candidate_regression_compat(model):
     # tile_var[d0] should equal the single tile size (16)
     tile_v = stub.tile_var[d0]
     assert abs(tile_v.X - 16.0) < 1e-6, f"Expected tile_var[dim].X == 16.0, got {tile_v.X}"
+
+
+# ---------------------------------------------------------------------------
+# Helpers for Task 2: _init_transfer_fire_helpers + _ssis_coefficients tests
+# ---------------------------------------------------------------------------
+
+
+def _build_ssis_stub(dim_sizes_relevancies: list[tuple, ...]):
+    """Build a mock SSIS with get_applicable_temporal_variables returning mocks."""
+    from stream.workload.steady_state.iteration_space import (
+        IterationVariable,
+        IterationVariableType,
+        LoopEffect,
+        Reuse,
+        SteadyStateIterationSpace,
+    )
+    variables = []
+    for dim, size, relevant in dim_sizes_relevancies:
+        effect = LoopEffect.VARYING if relevant else LoopEffect.INVARIANT
+        iv = IterationVariable(dimension=dim, size=size, effect=effect, type=IterationVariableType.TEMPORAL)
+        variables.append(iv)
+    return SteadyStateIterationSpace(variables)
+
+
+def _make_fire_helpers_stub(
+    model: gp.Model,
+    search_space,
+    ssis_per_tr,
+    tensors_per_tr: list[list],
+):
+    """Build a stub with _init_transfer_fire_helpers bound.
+
+    Parameters
+    ----------
+    model : gp.Model
+    search_space : SearchSpace | None
+    ssis_per_tr : list of SteadyStateIterationSpace  (one per transfer node)
+    tensors_per_tr : list of lists of Tensor mocks (one list per transfer node)
+    """
+    from stream.opt.allocation.constraint_optimization.transfer_and_tensor_allocation import (
+        TransferAndTensorAllocator,
+    )
+
+    stub = types.SimpleNamespace()
+    stub.model = model
+    stub.search_space = search_space
+    stub.w = {}
+    stub.tile_var = {}
+    stub._tensor_max_size = {}
+    stub._tensor_joint_candidates = {}
+
+    # Build transfer node mocks
+    trs = []
+    for i, (ssis, tensors) in enumerate(zip(ssis_per_tr, tensors_per_tr)):
+        tr = MagicMock()
+        tr.name = f"tr_{i}"
+        tr.tensors = tensors
+        trs.append(tr)
+    stub.transfer_nodes = tuple(trs)
+    stub.ssis = {tr: ssis for tr, ssis in zip(trs, ssis_per_tr)}
+
+    # Fire helpers state
+    stub.reuse_levels = {}
+    stub.tiles_needed_levels = {}
+    stub.bds_needed_levels = {}
+    stub.transfer_nodes_to_optimize_firings_for = []
+    stub._ssis_max_coefficients = {}
+
+    # Bind all required methods
+    stub._ssis_tiled_dims_for_transfer = (
+        TransferAndTensorAllocator._ssis_tiled_dims_for_transfer.__get__(stub)
+    )
+    stub._ssis_coefficients_for_transfer = (
+        TransferAndTensorAllocator._ssis_coefficients_for_transfer.__get__(stub)
+    )
+    stub._joint_binary_for_combo = (
+        TransferAndTensorAllocator._joint_binary_for_combo.__get__(stub)
+    )
+    stub._add_binary_product = (
+        TransferAndTensorAllocator._add_binary_product.__get__(stub)
+    )
+    stub._safe_name = (
+        TransferAndTensorAllocator._safe_name.__get__(stub)
+    )
+    stub._init_transfer_fire_helpers = (
+        TransferAndTensorAllocator._init_transfer_fire_helpers.__get__(stub)
+    )
+    return stub, trs
+
+
+# ---------------------------------------------------------------------------
+# Tests for _ssis_tiled_dims_for_transfer
+# ---------------------------------------------------------------------------
+
+
+def test_ssis_tiled_dims_for_transfer_no_search_space(model):
+    """When search_space is None, returns empty list."""
+    from stream.opt.allocation.constraint_optimization.transfer_and_tensor_allocation import (
+        TransferAndTensorAllocator,
+    )
+
+    stub = types.SimpleNamespace()
+    stub.search_space = None
+
+    # Bind method
+    stub._ssis_tiled_dims_for_transfer = (
+        TransferAndTensorAllocator._ssis_tiled_dims_for_transfer.__get__(stub)
+    )
+
+    tr = MagicMock()
+    result = stub._ssis_tiled_dims_for_transfer(tr)
+    assert result == []
+
+
+def test_ssis_tiled_dims_for_transfer_intersection(model):
+    """Returns only dims present in both search_space and SSIS temporal dims."""
+    from stream.workload.steady_state.iteration_space import (
+        IterationVariable,
+        IterationVariableType,
+        LoopEffect,
+        SteadyStateIterationSpace,
+    )
+    from stream.opt.allocation.constraint_optimization.transfer_and_tensor_allocation import (
+        TransferAndTensorAllocator,
+    )
+
+    d0 = _dim(0)
+    d1 = _dim(1)
+    d99 = _dim(99)  # in search_space but NOT in SSIS
+
+    ss = _build_search_space({0: [16, 32], 99: [4, 8]})
+
+    stub = types.SimpleNamespace()
+    stub.search_space = ss
+
+    # SSIS with d0 and d1 but NOT d99
+    ssis = SteadyStateIterationSpace([
+        IterationVariable(d0, 16, LoopEffect.VARYING, IterationVariableType.TEMPORAL),
+        IterationVariable(d1, 8, LoopEffect.VARYING, IterationVariableType.TEMPORAL),
+    ])
+    tr = MagicMock()
+    stub.ssis = {tr: ssis}
+
+    stub._ssis_tiled_dims_for_transfer = (
+        TransferAndTensorAllocator._ssis_tiled_dims_for_transfer.__get__(stub)
+    )
+    result = stub._ssis_tiled_dims_for_transfer(tr)
+    # Only d0 is in both search_space (pos=0) and SSIS temporal dims
+    assert d0 in result
+    assert d99 not in result
+
+
+# ---------------------------------------------------------------------------
+# Tests for _init_transfer_fire_helpers scalar fallback (search_space=None)
+# ---------------------------------------------------------------------------
+
+
+def test_init_fire_helpers_scalar_fallback(model):
+    """search_space=None: reuse_levels[(t,-1)] is a plain (int, int) tuple."""
+    d0 = _dim(0)
+    ssis = _build_ssis_stub([(d0, 4, True)])
+    tensor = MagicMock()
+    tensor.name = "t0"
+    stub, trs = _make_fire_helpers_stub(model, None, [ssis], [[tensor]])
+
+    stub._init_transfer_fire_helpers()
+
+    # Scalar path: reuse_levels[(tensor, -1)] == (fires, size_factor)
+    assert (tensor, -1) in stub.reuse_levels
+    val = stub.reuse_levels[(tensor, -1)]
+    assert isinstance(val, tuple)
+    assert len(val) == 2
+    fires, sf = val
+    assert isinstance(fires, int)
+    assert isinstance(sf, int)
+    # With 1 temporal loop of size 4 (relevant): fires=4, sf=1 at stop=-1
+    assert fires == 4
+    assert sf == 1
+
+
+def test_init_fire_helpers_scalar_tiles_needed(model):
+    """search_space=None: tiles_needed_levels[(t,stop)] is a plain int."""
+    d0 = _dim(0)
+    ssis = _build_ssis_stub([(d0, 4, True)])
+    tensor = MagicMock()
+    tensor.name = "t0"
+    stub, trs = _make_fire_helpers_stub(model, None, [ssis], [[tensor]])
+
+    stub._init_transfer_fire_helpers()
+
+    assert (tensor, -1) in stub.tiles_needed_levels
+    assert isinstance(stub.tiles_needed_levels[(tensor, -1)], int)
+
+
+def test_init_fire_helpers_variable_tile_coefficients(model):
+    """search_space with 2 candidates: reuse_levels[(t,-1)] is a list of (fires,sf,jw) tuples."""
+    d0 = _dim(0)
+    ss = _build_search_space({0: [16, 32]})
+
+    # Create w vars
+    from stream.opt.allocation.constraint_optimization.transfer_and_tensor_allocation import (
+        TransferAndTensorAllocator,
+    )
+
+    # SSIS for this transfer: d0 with size 16 (will be replaced by candidate sizes)
+    ssis = _build_ssis_stub([(d0, 16, True)])
+
+    tensor = MagicMock()
+    tensor.name = "t0"
+    stub, trs = _make_fire_helpers_stub(model, ss, [ssis], [[tensor]])
+
+    # Create tile selection vars
+    stub._TransferAndTensorAllocator__create_tile_selection_vars = (
+        TransferAndTensorAllocator._TransferAndTensorAllocator__create_tile_selection_vars.__get__(stub)
+    )
+    stub._tiled_dims_for_tensor = (
+        TransferAndTensorAllocator._tiled_dims_for_tensor.__get__(stub)
+    )
+    stub._TransferAndTensorAllocator__create_tile_selection_vars()
+    model.update()
+
+    # We need workload for the ssis_tiled_dims check
+    stub.workload = MagicMock()
+    stub.workload.get_dimension_size.return_value = 256  # workload_size for d0
+
+    stub._init_transfer_fire_helpers()
+    model.update()
+
+    # With 2 candidates, reuse_levels[(tensor,-1)] should be a list with 2 entries
+    assert (tensor, -1) in stub.reuse_levels
+    val = stub.reuse_levels[(tensor, -1)]
+    assert isinstance(val, list), f"Expected list, got {type(val)}"
+    assert len(val) == 2
+    # Each entry: (fires_coeff, size_factor_coeff, joint_binary_var)
+    for fires_c, sf_c, jw in val:
+        assert isinstance(fires_c, int)
+        assert isinstance(sf_c, int)
+        assert hasattr(jw, "VType")  # is a gp.Var
+
+
+def test_init_fire_helpers_degenerate_single_candidate(model):
+    """search_space with 1 candidate: coefficient lists have exactly 1 entry."""
+    d0 = _dim(0)
+    ss = _build_search_space({0: [16]})
+
+    from stream.opt.allocation.constraint_optimization.transfer_and_tensor_allocation import (
+        TransferAndTensorAllocator,
+    )
+
+    ssis = _build_ssis_stub([(d0, 16, True)])
+    tensor = MagicMock()
+    tensor.name = "t0"
+    stub, trs = _make_fire_helpers_stub(model, ss, [ssis], [[tensor]])
+
+    stub._TransferAndTensorAllocator__create_tile_selection_vars = (
+        TransferAndTensorAllocator._TransferAndTensorAllocator__create_tile_selection_vars.__get__(stub)
+    )
+    stub._tiled_dims_for_tensor = (
+        TransferAndTensorAllocator._tiled_dims_for_tensor.__get__(stub)
+    )
+    stub._TransferAndTensorAllocator__create_tile_selection_vars()
+    model.update()
+
+    stub.workload = MagicMock()
+    stub.workload.get_dimension_size.return_value = 256
+
+    stub._init_transfer_fire_helpers()
+    model.update()
+
+    assert (tensor, -1) in stub.reuse_levels
+    val = stub.reuse_levels[(tensor, -1)]
+    assert isinstance(val, list)
+    assert len(val) == 1
+
+
+def test_ensure_same_ssis_not_called_at_init():
+    """_ensure_same_ssis_for_all_transfers is NOT called in __init__ block.
+
+    Structural test: the __init__ source must not invoke _ensure_same_ssis_for_all_transfers.
+    """
+    import inspect
+    from stream.opt.allocation.constraint_optimization.transfer_and_tensor_allocation import (
+        TransferAndTensorAllocator,
+    )
+
+    source = inspect.getsource(TransferAndTensorAllocator.__init__)
+    # The call _ensure_same_ssis_for_all_transfers() must not appear in __init__
+    assert "_ensure_same_ssis_for_all_transfers()" not in source, (
+        "_ensure_same_ssis_for_all_transfers() is still called in __init__ (should be post-solve only)"
+    )
