@@ -783,14 +783,37 @@ class TransferAndTensorAllocator:
             fires = self.model.addVar(vtype=GRB.INTEGER, name=f"fires_{tr.name}")
             self.fires[tr] = fires
 
-            self.model.addConstr(
-                fires
-                == quicksum(
-                    self.reuse_levels[(t, s)][0] * self.z_stop[(t, s)]
-                    for s in range(-1, len(self.ssis[tr].get_applicable_temporal_variables()))
-                ),
-                name=f"fires_def_{tr.name}",
-            )
+            rl_check = self.reuse_levels[(t, -1)]
+            if isinstance(rl_check, list):
+                # --- Variable tile mode ---
+                # For each stop level, fires_expr = quicksum(fires_k * jw_k for fires_k, _, jw_k in rl_s)
+                # fires == quicksum_over_stops(fires_expr_at_stop * z_stop_at_stop)
+                # fires_expr * z is LinExpr * binary → lc auxiliary
+                lc_sum = gp.LinExpr()
+                for s in range(-1, len(self.ssis[tr].get_applicable_temporal_variables())):
+                    rl_s = self.reuse_levels[(t, s)]
+                    z = self.z_stop[(t, s)]
+                    fires_expr = quicksum(fc * jw for fc, _, jw in rl_s)
+                    M = self._ssis_max_coefficients[(t, s)]["fires"]
+                    lc = self.model.addVar(
+                        vtype=GRB.CONTINUOUS, lb=0, ub=M,
+                        name=f"fire_lc_{tr.name}_L{s}",
+                    )
+                    self.model.addConstr(lc <= fires_expr, name=f"fire_lc_ub_expr_{tr.name}_L{s}")
+                    self.model.addConstr(lc <= M * z, name=f"fire_lc_ub_m_{tr.name}_L{s}")
+                    self.model.addConstr(lc >= fires_expr - M * (1 - z), name=f"fire_lc_lb_{tr.name}_L{s}")
+                    lc_sum += lc
+                self.model.addConstr(fires == lc_sum, name=f"fires_def_{tr.name}")
+            else:
+                # --- Scalar fallback (original behavior) ---
+                self.model.addConstr(
+                    fires
+                    == quicksum(
+                        self.reuse_levels[(t, s)][0] * self.z_stop[(t, s)]
+                        for s in range(-1, len(self.ssis[tr].get_applicable_temporal_variables()))
+                    ),
+                    name=f"fires_def_{tr.name}",
+                )
 
     def _reuse_factor_rate_constraints(self):
         self.reuse_factors: dict[TransferNode, gp.Var] = {}
@@ -803,14 +826,35 @@ class TransferAndTensorAllocator:
             reuse_factor = self.model.addVar(vtype=GRB.INTEGER, name=f"reuse_factor_{tr.name}")
             self.reuse_factors[tr] = reuse_factor
 
-            self.model.addConstr(
-                reuse_factor
-                == quicksum(
-                    self.reuse_levels[(t, s)][1] * self.z_stop[(t, s)]
-                    for s in range(-1, len(self.ssis[tr].get_applicable_temporal_variables()))
-                ),
-                name=f"reuse_factor_def_{tr.name}",
-            )
+            rl_check = self.reuse_levels[(t, -1)]
+            if isinstance(rl_check, list):
+                # --- Variable tile mode ---
+                # Same pattern as fire rate but using size_factor (index 1) from each triple
+                lc_sum = gp.LinExpr()
+                for s in range(-1, len(self.ssis[tr].get_applicable_temporal_variables())):
+                    rl_s = self.reuse_levels[(t, s)]
+                    z = self.z_stop[(t, s)]
+                    sf_expr = quicksum(sf_c * jw for _, sf_c, jw in rl_s)
+                    M = self._ssis_max_coefficients[(t, s)]["size_factor"]
+                    lc = self.model.addVar(
+                        vtype=GRB.CONTINUOUS, lb=0, ub=M,
+                        name=f"rf_lc_{tr.name}_L{s}",
+                    )
+                    self.model.addConstr(lc <= sf_expr, name=f"rf_lc_ub_expr_{tr.name}_L{s}")
+                    self.model.addConstr(lc <= M * z, name=f"rf_lc_ub_m_{tr.name}_L{s}")
+                    self.model.addConstr(lc >= sf_expr - M * (1 - z), name=f"rf_lc_lb_{tr.name}_L{s}")
+                    lc_sum += lc
+                self.model.addConstr(reuse_factor == lc_sum, name=f"reuse_factor_def_{tr.name}")
+            else:
+                # --- Scalar fallback (original behavior) ---
+                self.model.addConstr(
+                    reuse_factor
+                    == quicksum(
+                        self.reuse_levels[(t, s)][1] * self.z_stop[(t, s)]
+                        for s in range(-1, len(self.ssis[tr].get_applicable_temporal_variables()))
+                    ),
+                    name=f"reuse_factor_def_{tr.name}",
+                )
 
     # ...................... path choice ........................ #
     def _path_choice_constraints(self) -> None:
