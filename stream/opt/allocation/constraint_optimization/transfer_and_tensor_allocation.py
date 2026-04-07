@@ -1043,15 +1043,40 @@ class TransferAndTensorAllocator:
                     assert isinstance(c, Core)
                     u = self._tensor_uses_core_var(t, c)
                     for stop in range(-1, len(self.ssis[tr].get_applicable_temporal_variables())):
-                        tiles_needed = self.tiles_needed_levels[(t, stop)]
-                        tiles_needed += 1 if self.force_double_buffering else 0
-
+                        tn = self.tiles_needed_levels[(t, stop)]
                         uz = self._add_binary_product(
                             a=u,
                             b=self.z_stop[(t, stop)],
                             base_name=f"objfifo_{t.name}_{_resource_key(c)}_L{stop}",
                         )
-                        self.object_fifo_depth[c] += tiles_needed * uz
+                        if isinstance(tn, list):
+                            # --- Variable tile mode ---
+                            db_offset = 1 if self.force_double_buffering else 0
+                            tiles_needed_expr = quicksum(tnk * jw for tnk, jw in tn)
+                            tiles_expr_with_db = tiles_needed_expr + db_offset
+                            M = self._ssis_max_coefficients[(t, stop)]["tiles_needed"] + db_offset
+                            lc = self.model.addVar(
+                                vtype=GRB.CONTINUOUS, lb=0, ub=M,
+                                name=f"fifo_lc_{t.name}_{_resource_key(c)}_L{stop}",
+                            )
+                            self.model.addConstr(
+                                lc <= tiles_expr_with_db,
+                                name=f"fifo_lc_ub_expr_{t.name}_{_resource_key(c)}_L{stop}",
+                            )
+                            self.model.addConstr(
+                                lc <= M * uz,
+                                name=f"fifo_lc_ub_m_{t.name}_{_resource_key(c)}_L{stop}",
+                            )
+                            self.model.addConstr(
+                                lc >= tiles_expr_with_db - M * (1 - uz),
+                                name=f"fifo_lc_lb_{t.name}_{_resource_key(c)}_L{stop}",
+                            )
+                            self.object_fifo_depth[c] += lc
+                        else:
+                            # --- Scalar fallback ---
+                            tiles_needed = tn
+                            tiles_needed += 1 if self.force_double_buffering else 0
+                            self.object_fifo_depth[c] += tiles_needed * uz
         self.context.add_object_fifo_constraints(self.model, self.object_fifo_depth)
 
     def _buffer_descriptor_constraints(self):
@@ -1068,18 +1093,43 @@ class TransferAndTensorAllocator:
                         continue
                     assert isinstance(c, Core)
                     if c.type == "compute":
-                        factor_variable = self.tiles_needed_levels
+                        factor_dict = self.tiles_needed_levels
+                        max_key = "tiles_needed"
                     else:
-                        factor_variable = self.bds_needed_levels
+                        factor_dict = self.bds_needed_levels
+                        max_key = "bds_needed"
                     u = self._tensor_uses_core_var(t, c)
                     for stop in range(-1, len(self.ssis[tr].get_applicable_temporal_variables())):
-                        bds_needed = factor_variable[(t, stop)]
+                        factor = factor_dict[(t, stop)]
                         uz = self._add_binary_product(
                             a=u,
                             b=self.z_stop[(t, stop)],
                             base_name=f"bddepth_{t.name}_{_resource_key(c)}_L{stop}",
                         )
-                        self.bd_depth[c] += bds_needed * uz
+                        if isinstance(factor, list):
+                            # --- Variable tile mode ---
+                            factor_expr = quicksum(fk * jw for fk, jw in factor)
+                            M = self._ssis_max_coefficients[(t, stop)][max_key]
+                            lc = self.model.addVar(
+                                vtype=GRB.CONTINUOUS, lb=0, ub=M,
+                                name=f"bd_lc_{t.name}_{_resource_key(c)}_L{stop}",
+                            )
+                            self.model.addConstr(
+                                lc <= factor_expr,
+                                name=f"bd_lc_ub_expr_{t.name}_{_resource_key(c)}_L{stop}",
+                            )
+                            self.model.addConstr(
+                                lc <= M * uz,
+                                name=f"bd_lc_ub_m_{t.name}_{_resource_key(c)}_L{stop}",
+                            )
+                            self.model.addConstr(
+                                lc >= factor_expr - M * (1 - uz),
+                                name=f"bd_lc_lb_{t.name}_{_resource_key(c)}_L{stop}",
+                            )
+                            self.bd_depth[c] += lc
+                        else:
+                            # --- Scalar fallback ---
+                            self.bd_depth[c] += factor * uz
         self.context.add_buffer_descriptor_constraints(self.model, self.bd_depth)
 
     def _ensure_memory_and_compute_reuse_compatibility(self):
