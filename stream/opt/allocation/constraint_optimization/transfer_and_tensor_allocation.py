@@ -783,14 +783,37 @@ class TransferAndTensorAllocator:
             fires = self.model.addVar(vtype=GRB.INTEGER, name=f"fires_{tr.name}")
             self.fires[tr] = fires
 
-            self.model.addConstr(
-                fires
-                == quicksum(
-                    self.reuse_levels[(t, s)][0] * self.z_stop[(t, s)]
-                    for s in range(-1, len(self.ssis[tr].get_applicable_temporal_variables()))
-                ),
-                name=f"fires_def_{tr.name}",
-            )
+            rl_check = self.reuse_levels[(t, -1)]
+            if isinstance(rl_check, list):
+                # --- Variable tile mode ---
+                # For each stop level, fires_expr = quicksum(fires_k * jw_k for fires_k, _, jw_k in rl_s)
+                # fires == quicksum_over_stops(fires_expr_at_stop * z_stop_at_stop)
+                # fires_expr * z is LinExpr * binary → lc auxiliary
+                lc_sum = gp.LinExpr()
+                for s in range(-1, len(self.ssis[tr].get_applicable_temporal_variables())):
+                    rl_s = self.reuse_levels[(t, s)]
+                    z = self.z_stop[(t, s)]
+                    fires_expr = quicksum(fc * jw for fc, _, jw in rl_s)
+                    M = self._ssis_max_coefficients[(t, s)]["fires"]
+                    lc = self.model.addVar(
+                        vtype=GRB.CONTINUOUS, lb=0, ub=M,
+                        name=f"fire_lc_{tr.name}_L{s}",
+                    )
+                    self.model.addConstr(lc <= fires_expr, name=f"fire_lc_ub_expr_{tr.name}_L{s}")
+                    self.model.addConstr(lc <= M * z, name=f"fire_lc_ub_m_{tr.name}_L{s}")
+                    self.model.addConstr(lc >= fires_expr - M * (1 - z), name=f"fire_lc_lb_{tr.name}_L{s}")
+                    lc_sum += lc
+                self.model.addConstr(fires == lc_sum, name=f"fires_def_{tr.name}")
+            else:
+                # --- Scalar fallback (original behavior) ---
+                self.model.addConstr(
+                    fires
+                    == quicksum(
+                        self.reuse_levels[(t, s)][0] * self.z_stop[(t, s)]
+                        for s in range(-1, len(self.ssis[tr].get_applicable_temporal_variables()))
+                    ),
+                    name=f"fires_def_{tr.name}",
+                )
 
     def _reuse_factor_rate_constraints(self):
         self.reuse_factors: dict[TransferNode, gp.Var] = {}
@@ -803,14 +826,35 @@ class TransferAndTensorAllocator:
             reuse_factor = self.model.addVar(vtype=GRB.INTEGER, name=f"reuse_factor_{tr.name}")
             self.reuse_factors[tr] = reuse_factor
 
-            self.model.addConstr(
-                reuse_factor
-                == quicksum(
-                    self.reuse_levels[(t, s)][1] * self.z_stop[(t, s)]
-                    for s in range(-1, len(self.ssis[tr].get_applicable_temporal_variables()))
-                ),
-                name=f"reuse_factor_def_{tr.name}",
-            )
+            rl_check = self.reuse_levels[(t, -1)]
+            if isinstance(rl_check, list):
+                # --- Variable tile mode ---
+                # Same pattern as fire rate but using size_factor (index 1) from each triple
+                lc_sum = gp.LinExpr()
+                for s in range(-1, len(self.ssis[tr].get_applicable_temporal_variables())):
+                    rl_s = self.reuse_levels[(t, s)]
+                    z = self.z_stop[(t, s)]
+                    sf_expr = quicksum(sf_c * jw for _, sf_c, jw in rl_s)
+                    M = self._ssis_max_coefficients[(t, s)]["size_factor"]
+                    lc = self.model.addVar(
+                        vtype=GRB.CONTINUOUS, lb=0, ub=M,
+                        name=f"rf_lc_{tr.name}_L{s}",
+                    )
+                    self.model.addConstr(lc <= sf_expr, name=f"rf_lc_ub_expr_{tr.name}_L{s}")
+                    self.model.addConstr(lc <= M * z, name=f"rf_lc_ub_m_{tr.name}_L{s}")
+                    self.model.addConstr(lc >= sf_expr - M * (1 - z), name=f"rf_lc_lb_{tr.name}_L{s}")
+                    lc_sum += lc
+                self.model.addConstr(reuse_factor == lc_sum, name=f"reuse_factor_def_{tr.name}")
+            else:
+                # --- Scalar fallback (original behavior) ---
+                self.model.addConstr(
+                    reuse_factor
+                    == quicksum(
+                        self.reuse_levels[(t, s)][1] * self.z_stop[(t, s)]
+                        for s in range(-1, len(self.ssis[tr].get_applicable_temporal_variables()))
+                    ),
+                    name=f"reuse_factor_def_{tr.name}",
+                )
 
     # ...................... path choice ........................ #
     def _path_choice_constraints(self) -> None:
@@ -999,15 +1043,40 @@ class TransferAndTensorAllocator:
                     assert isinstance(c, Core)
                     u = self._tensor_uses_core_var(t, c)
                     for stop in range(-1, len(self.ssis[tr].get_applicable_temporal_variables())):
-                        tiles_needed = self.tiles_needed_levels[(t, stop)]
-                        tiles_needed += 1 if self.force_double_buffering else 0
-
+                        tn = self.tiles_needed_levels[(t, stop)]
                         uz = self._add_binary_product(
                             a=u,
                             b=self.z_stop[(t, stop)],
                             base_name=f"objfifo_{t.name}_{_resource_key(c)}_L{stop}",
                         )
-                        self.object_fifo_depth[c] += tiles_needed * uz
+                        if isinstance(tn, list):
+                            # --- Variable tile mode ---
+                            db_offset = 1 if self.force_double_buffering else 0
+                            tiles_needed_expr = quicksum(tnk * jw for tnk, jw in tn)
+                            tiles_expr_with_db = tiles_needed_expr + db_offset
+                            M = self._ssis_max_coefficients[(t, stop)]["tiles_needed"] + db_offset
+                            lc = self.model.addVar(
+                                vtype=GRB.CONTINUOUS, lb=0, ub=M,
+                                name=f"fifo_lc_{t.name}_{_resource_key(c)}_L{stop}",
+                            )
+                            self.model.addConstr(
+                                lc <= tiles_expr_with_db,
+                                name=f"fifo_lc_ub_expr_{t.name}_{_resource_key(c)}_L{stop}",
+                            )
+                            self.model.addConstr(
+                                lc <= M * uz,
+                                name=f"fifo_lc_ub_m_{t.name}_{_resource_key(c)}_L{stop}",
+                            )
+                            self.model.addConstr(
+                                lc >= tiles_expr_with_db - M * (1 - uz),
+                                name=f"fifo_lc_lb_{t.name}_{_resource_key(c)}_L{stop}",
+                            )
+                            self.object_fifo_depth[c] += lc
+                        else:
+                            # --- Scalar fallback ---
+                            tiles_needed = tn
+                            tiles_needed += 1 if self.force_double_buffering else 0
+                            self.object_fifo_depth[c] += tiles_needed * uz
         self.context.add_object_fifo_constraints(self.model, self.object_fifo_depth)
 
     def _buffer_descriptor_constraints(self):
@@ -1024,18 +1093,43 @@ class TransferAndTensorAllocator:
                         continue
                     assert isinstance(c, Core)
                     if c.type == "compute":
-                        factor_variable = self.tiles_needed_levels
+                        factor_dict = self.tiles_needed_levels
+                        max_key = "tiles_needed"
                     else:
-                        factor_variable = self.bds_needed_levels
+                        factor_dict = self.bds_needed_levels
+                        max_key = "bds_needed"
                     u = self._tensor_uses_core_var(t, c)
                     for stop in range(-1, len(self.ssis[tr].get_applicable_temporal_variables())):
-                        bds_needed = factor_variable[(t, stop)]
+                        factor = factor_dict[(t, stop)]
                         uz = self._add_binary_product(
                             a=u,
                             b=self.z_stop[(t, stop)],
                             base_name=f"bddepth_{t.name}_{_resource_key(c)}_L{stop}",
                         )
-                        self.bd_depth[c] += bds_needed * uz
+                        if isinstance(factor, list):
+                            # --- Variable tile mode ---
+                            factor_expr = quicksum(fk * jw for fk, jw in factor)
+                            M = self._ssis_max_coefficients[(t, stop)][max_key]
+                            lc = self.model.addVar(
+                                vtype=GRB.CONTINUOUS, lb=0, ub=M,
+                                name=f"bd_lc_{t.name}_{_resource_key(c)}_L{stop}",
+                            )
+                            self.model.addConstr(
+                                lc <= factor_expr,
+                                name=f"bd_lc_ub_expr_{t.name}_{_resource_key(c)}_L{stop}",
+                            )
+                            self.model.addConstr(
+                                lc <= M * uz,
+                                name=f"bd_lc_ub_m_{t.name}_{_resource_key(c)}_L{stop}",
+                            )
+                            self.model.addConstr(
+                                lc >= factor_expr - M * (1 - uz),
+                                name=f"bd_lc_lb_{t.name}_{_resource_key(c)}_L{stop}",
+                            )
+                            self.bd_depth[c] += lc
+                        else:
+                            # --- Scalar fallback ---
+                            self.bd_depth[c] += factor * uz
         self.context.add_buffer_descriptor_constraints(self.model, self.bd_depth)
 
     def _ensure_memory_and_compute_reuse_compatibility(self):

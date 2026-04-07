@@ -910,3 +910,593 @@ def test_ensure_same_ssis_not_called_at_init():
     assert "_ensure_same_ssis_for_all_transfers()" not in source, (
         "_ensure_same_ssis_for_all_transfers() is still called in __init__ (should be post-solve only)"
     )
+
+
+# ---------------------------------------------------------------------------
+# Helpers for Task 1: _transfer_fire_rate_constraints and
+# _reuse_factor_rate_constraints tests
+# ---------------------------------------------------------------------------
+
+
+def _make_fire_rate_stub(model: gp.Model, n_stops: int = 1):
+    """Build a minimal stub for fire rate / reuse factor constraint tests.
+
+    Pre-wires:
+    - A single transfer node with one input tensor
+    - scalar reuse_levels (search_space=None baseline)
+    - z_stop binary vars for (tensor, stop) for stop in range(-1, n_stops)
+    - SSIS mock returning n_stops temporal variables
+    - fires dict (empty, to be populated by method)
+    - reuse_factors dict
+    """
+    from stream.opt.allocation.constraint_optimization.transfer_and_tensor_allocation import (
+        TransferAndTensorAllocator,
+    )
+    from stream.workload.workload import Tensor
+
+    stub = types.SimpleNamespace()
+    stub.model = model
+
+    # Single transfer node with one input tensor
+    tensor = MagicMock(spec=Tensor)
+    tensor.name = "tr_tensor"
+    tr = MagicMock()
+    tr.name = "tr0"
+    tr.inputs = [tensor]
+    stub.transfer_nodes = [tr]
+
+    # SSIS mock
+    ssis_mock = MagicMock()
+    temporal_vars = [MagicMock()] * n_stops
+    ssis_mock.get_applicable_temporal_variables.return_value = temporal_vars
+    stub.ssis = {tr: ssis_mock}
+
+    # z_stop binary variables
+    stub.z_stop = {}
+    for s in range(-1, n_stops):
+        z = model.addVar(vtype=GRB.BINARY, name=f"z_{s}")
+        stub.z_stop[(tensor, s)] = z
+    model.update()
+
+    # Scalar reuse_levels: (fires_coeff, size_factor_coeff)
+    stub.reuse_levels = {}
+    for s in range(-1, n_stops):
+        stub.reuse_levels[(tensor, s)] = (3, 2)  # fires=3, sf=2
+
+    # Bind constraint methods
+    stub.fires = {}
+    stub.reuse_factors = {}
+    stub._transfer_fire_rate_constraints = (
+        TransferAndTensorAllocator._transfer_fire_rate_constraints.__get__(stub)
+    )
+    stub._reuse_factor_rate_constraints = (
+        TransferAndTensorAllocator._reuse_factor_rate_constraints.__get__(stub)
+    )
+    return stub, tr, tensor
+
+
+def _make_fire_rate_stub_variable(model: gp.Model, n_candidates: int = 2, n_stops: int = 1):
+    """Build stub with candidate-indexed (variable tile) reuse_levels.
+
+    reuse_levels[(tensor, stop)] = list of (fires_k, sf_k, jw_k) tuples
+    """
+    from stream.opt.allocation.constraint_optimization.transfer_and_tensor_allocation import (
+        TransferAndTensorAllocator,
+    )
+    from stream.workload.workload import Tensor
+
+    stub = types.SimpleNamespace()
+    stub.model = model
+
+    tensor = MagicMock(spec=Tensor)
+    tensor.name = "tr_tensor_var"
+    tr = MagicMock()
+    tr.name = "tr_var"
+    tr.inputs = [tensor]
+    stub.transfer_nodes = [tr]
+
+    ssis_mock = MagicMock()
+    temporal_vars = [MagicMock()] * n_stops
+    ssis_mock.get_applicable_temporal_variables.return_value = temporal_vars
+    stub.ssis = {tr: ssis_mock}
+
+    # z_stop binary variables
+    stub.z_stop = {}
+    for s in range(-1, n_stops):
+        z = model.addVar(vtype=GRB.BINARY, name=f"z_var_{s}")
+        stub.z_stop[(tensor, s)] = z
+
+    # joint binary variables (one per candidate)
+    jw_vars = [model.addVar(vtype=GRB.BINARY, name=f"jw_{k}") for k in range(n_candidates)]
+    model.update()
+
+    # candidate coefficients: fires_k = (k+1)*4, sf_k = (k+1)*2
+    stub.reuse_levels = {}
+    stub._ssis_max_coefficients = {}
+    for s in range(-1, n_stops):
+        stub.reuse_levels[(tensor, s)] = [
+            ((k + 1) * 4, (k + 1) * 2, jw_vars[k]) for k in range(n_candidates)
+        ]
+        max_fires = n_candidates * 4
+        max_sf = n_candidates * 2
+        stub._ssis_max_coefficients[(tensor, s)] = {
+            "fires": max_fires,
+            "size_factor": max_sf,
+        }
+
+    # Bind constraint methods
+    stub.fires = {}
+    stub.reuse_factors = {}
+    stub._transfer_fire_rate_constraints = (
+        TransferAndTensorAllocator._transfer_fire_rate_constraints.__get__(stub)
+    )
+    stub._reuse_factor_rate_constraints = (
+        TransferAndTensorAllocator._reuse_factor_rate_constraints.__get__(stub)
+    )
+    return stub, tr, tensor, jw_vars
+
+
+# ---------------------------------------------------------------------------
+# Tests for _transfer_fire_rate_constraints (Task 1 RED)
+# ---------------------------------------------------------------------------
+
+
+def test_fire_rate_scalar_creates_fires_def_constraint(model):
+    """With scalar reuse_levels, fires_def_{tr.name} constraint exists (unchanged behavior)."""
+    stub, tr, tensor = _make_fire_rate_stub(model, n_stops=1)
+    stub._transfer_fire_rate_constraints()
+    model.update()
+
+    constr_names = {c.ConstrName for c in model.getConstrs()}
+    assert f"fires_def_{tr.name}" in constr_names, (
+        f"Expected fires_def_{tr.name}, got: {constr_names}"
+    )
+
+
+def test_fire_rate_scalar_no_lc_vars(model):
+    """With scalar reuse_levels, no fire_lc_* auxiliary variables are created."""
+    stub, tr, tensor = _make_fire_rate_stub(model, n_stops=1)
+    stub._transfer_fire_rate_constraints()
+    model.update()
+
+    var_names = {v.VarName for v in model.getVars()}
+    lc_vars = [n for n in var_names if n.startswith("fire_lc_")]
+    assert len(lc_vars) == 0, f"Expected no fire_lc_ vars in scalar mode, got: {lc_vars}"
+
+
+def test_fire_rate_variable_creates_lc_vars(model):
+    """With candidate-indexed reuse_levels (2 candidates), fire_lc_ vars are created."""
+    stub, tr, tensor, jw_vars = _make_fire_rate_stub_variable(model, n_candidates=2, n_stops=1)
+    stub._transfer_fire_rate_constraints()
+    model.update()
+
+    var_names = {v.VarName for v in model.getVars()}
+    lc_vars = [n for n in var_names if n.startswith("fire_lc_")]
+    assert len(lc_vars) >= 1, f"Expected fire_lc_ vars in variable mode, got: {var_names}"
+
+
+def test_fire_rate_variable_creates_bigm_constraints(model):
+    """With candidate-indexed reuse_levels, fire_lc_ub_expr_, fire_lc_ub_m_, fire_lc_lb_ constraints exist."""
+    stub, tr, tensor, jw_vars = _make_fire_rate_stub_variable(model, n_candidates=2, n_stops=1)
+    stub._transfer_fire_rate_constraints()
+    model.update()
+
+    constr_names = {c.ConstrName for c in model.getConstrs()}
+    lc_ub_expr = [n for n in constr_names if n.startswith("fire_lc_ub_expr_")]
+    lc_ub_m = [n for n in constr_names if n.startswith("fire_lc_ub_m_")]
+    lc_lb = [n for n in constr_names if n.startswith("fire_lc_lb_")]
+
+    assert len(lc_ub_expr) >= 1, f"Missing fire_lc_ub_expr_ constraints: {constr_names}"
+    assert len(lc_ub_m) >= 1, f"Missing fire_lc_ub_m_ constraints: {constr_names}"
+    assert len(lc_lb) >= 1, f"Missing fire_lc_lb_ constraints: {constr_names}"
+
+
+# ---------------------------------------------------------------------------
+# Tests for _reuse_factor_rate_constraints (Task 1 RED)
+# ---------------------------------------------------------------------------
+
+
+def test_reuse_factor_scalar_creates_reuse_factor_def_constraint(model):
+    """With scalar reuse_levels, reuse_factor_def_{tr.name} constraint exists (unchanged)."""
+    stub, tr, tensor = _make_fire_rate_stub(model, n_stops=1)
+    stub._reuse_factor_rate_constraints()
+    model.update()
+
+    constr_names = {c.ConstrName for c in model.getConstrs()}
+    assert f"reuse_factor_def_{tr.name}" in constr_names, (
+        f"Expected reuse_factor_def_{tr.name}, got: {constr_names}"
+    )
+
+
+def test_reuse_factor_scalar_no_lc_vars(model):
+    """With scalar reuse_levels, no rf_lc_* auxiliary variables are created."""
+    stub, tr, tensor = _make_fire_rate_stub(model, n_stops=1)
+    stub._reuse_factor_rate_constraints()
+    model.update()
+
+    var_names = {v.VarName for v in model.getVars()}
+    lc_vars = [n for n in var_names if n.startswith("rf_lc_")]
+    assert len(lc_vars) == 0, f"Expected no rf_lc_ vars in scalar mode, got: {lc_vars}"
+
+
+def test_reuse_factor_variable_creates_lc_vars(model):
+    """With candidate-indexed reuse_levels (2 candidates), rf_lc_ vars are created."""
+    stub, tr, tensor, jw_vars = _make_fire_rate_stub_variable(model, n_candidates=2, n_stops=1)
+    stub._reuse_factor_rate_constraints()
+    model.update()
+
+    var_names = {v.VarName for v in model.getVars()}
+    lc_vars = [n for n in var_names if n.startswith("rf_lc_")]
+    assert len(lc_vars) >= 1, f"Expected rf_lc_ vars in variable mode, got: {var_names}"
+
+
+def test_reuse_factor_variable_creates_bigm_constraints(model):
+    """With candidate-indexed reuse_levels, rf_lc_ub_expr_, rf_lc_ub_m_, rf_lc_lb_ constraints exist."""
+    stub, tr, tensor, jw_vars = _make_fire_rate_stub_variable(model, n_candidates=2, n_stops=1)
+    stub._reuse_factor_rate_constraints()
+    model.update()
+
+    constr_names = {c.ConstrName for c in model.getConstrs()}
+    lc_ub_expr = [n for n in constr_names if n.startswith("rf_lc_ub_expr_")]
+    lc_ub_m = [n for n in constr_names if n.startswith("rf_lc_ub_m_")]
+    lc_lb = [n for n in constr_names if n.startswith("rf_lc_lb_")]
+
+    assert len(lc_ub_expr) >= 1, f"Missing rf_lc_ub_expr_ constraints: {constr_names}"
+    assert len(lc_ub_m) >= 1, f"Missing rf_lc_ub_m_ constraints: {constr_names}"
+    assert len(lc_lb) >= 1, f"Missing rf_lc_lb_ constraints: {constr_names}"
+
+
+# ---------------------------------------------------------------------------
+# Helpers for Task 2: _object_fifo_depth_constraints and
+# _buffer_descriptor_constraints tests
+# ---------------------------------------------------------------------------
+
+
+def _make_fifo_bd_stub(
+    model: gp.Model,
+    n_stops: int = 1,
+    tiles_needed_scalar: int = 2,
+    bds_needed_scalar: int = 3,
+    n_candidates: int = 0,  # 0 = scalar mode
+    force_double_buffering: bool = False,
+    core_type: str = "compute",
+):
+    """Build a minimal stub for fifo depth / BD constraint tests.
+
+    When n_candidates > 0: tiles_needed_levels / bds_needed_levels are lists of (coeff, jw) tuples.
+    When n_candidates == 0: they are plain ints (scalar mode).
+    """
+    from collections import defaultdict
+
+    from stream.hardware.architecture.core import Core
+    from stream.opt.allocation.constraint_optimization.transfer_and_tensor_allocation import (
+        TransferAndTensorAllocator,
+    )
+    from stream.workload.workload import Tensor
+
+    stub = types.SimpleNamespace()
+    stub.model = model
+    stub.offchip_core_id = 999  # different from core.id below
+    stub.force_double_buffering = force_double_buffering
+
+    # Build a Core mock
+    core = MagicMock(spec=Core)
+    core.id = 1
+    core.type = core_type
+    stub._core = core
+
+    # Build a Tensor mock
+    tensor = MagicMock(spec=Tensor)
+    tensor.name = "fifo_tensor"
+    stub._tensor = tensor
+
+    # Transfer node mock with outputs
+    tr = MagicMock()
+    tr.name = "tr_fifo"
+    tr.outputs = [tensor]
+    stub.transfer_nodes = [tr]
+
+    # SSIS mock
+    ssis_mock = MagicMock()
+    temporal_vars = [MagicMock()] * n_stops
+    ssis_mock.get_applicable_temporal_variables.return_value = temporal_vars
+    stub.ssis = {tr: ssis_mock}
+
+    # z_stop binary variables
+    stub.z_stop = {}
+    for s in range(-1, n_stops):
+        z = model.addVar(vtype=GRB.BINARY, name=f"z_fifo_{s}")
+        stub.z_stop[(tensor, s)] = z
+
+    # u (tensor uses core) binary var — fix to 1 so constraints are active
+    u = model.addVar(vtype=GRB.BINARY, name="u_fifo_core")
+    model.addConstr(u == 1, name="u_fifo_fixed")
+    model.update()
+
+    stub.tensor_core_indicator = {}
+    stub._tensor_uses_core_var = lambda t, c: u
+    stub._u = u
+
+    stub._candidate_cores_for_tensor = lambda t: {core}
+
+    # Build coefficient levels
+    stub._ssis_max_coefficients = {}
+    if n_candidates > 0:
+        # Variable tile mode: list of (coeff, jw) tuples
+        jw_vars = [model.addVar(vtype=GRB.BINARY, name=f"jw_fifo_{k}") for k in range(n_candidates)]
+        model.update()
+        stub.tiles_needed_levels = {}
+        stub.bds_needed_levels = {}
+        for s in range(-1, n_stops):
+            stub.tiles_needed_levels[(tensor, s)] = [
+                ((k + 1) * tiles_needed_scalar, jw_vars[k]) for k in range(n_candidates)
+            ]
+            stub.bds_needed_levels[(tensor, s)] = [
+                ((k + 1) * bds_needed_scalar, jw_vars[k]) for k in range(n_candidates)
+            ]
+            stub._ssis_max_coefficients[(tensor, s)] = {
+                "tiles_needed": n_candidates * tiles_needed_scalar,
+                "bds_needed": n_candidates * bds_needed_scalar,
+            }
+        stub._jw_vars = jw_vars
+    else:
+        # Scalar mode
+        stub.tiles_needed_levels = {}
+        stub.bds_needed_levels = {}
+        for s in range(-1, n_stops):
+            stub.tiles_needed_levels[(tensor, s)] = tiles_needed_scalar
+            stub.bds_needed_levels[(tensor, s)] = bds_needed_scalar
+
+    # Context mock — just captures calls
+    stub.context = MagicMock()
+
+    # Bind helpers
+    stub._add_binary_product = TransferAndTensorAllocator._add_binary_product.__get__(stub)
+    stub._safe_name = TransferAndTensorAllocator._safe_name.__get__(stub)
+
+    # Bind constraint methods
+    stub.object_fifo_depth = defaultdict(gp.LinExpr)
+    stub.bd_depth = defaultdict(gp.LinExpr)
+    stub._object_fifo_depth_constraints = (
+        TransferAndTensorAllocator._object_fifo_depth_constraints.__get__(stub)
+    )
+    stub._buffer_descriptor_constraints = (
+        TransferAndTensorAllocator._buffer_descriptor_constraints.__get__(stub)
+    )
+    return stub, tr, tensor, core
+
+
+# ---------------------------------------------------------------------------
+# Tests for _object_fifo_depth_constraints (Task 2 RED)
+# ---------------------------------------------------------------------------
+
+
+def test_fifo_depth_scalar_no_lc_vars(model):
+    """With scalar tiles_needed_levels, no fifo_lc_* auxiliary variables are created."""
+    stub, tr, tensor, core = _make_fifo_bd_stub(model, n_stops=1, tiles_needed_scalar=2)
+    stub._object_fifo_depth_constraints()
+    model.update()
+
+    var_names = {v.VarName for v in model.getVars()}
+    lc_vars = [n for n in var_names if n.startswith("fifo_lc_")]
+    assert len(lc_vars) == 0, f"Expected no fifo_lc_ vars in scalar mode, got: {lc_vars}"
+
+
+def test_fifo_depth_variable_creates_lc_vars(model):
+    """With candidate-indexed tiles_needed_levels (2 candidates), fifo_lc_ vars are created."""
+    stub, tr, tensor, core = _make_fifo_bd_stub(model, n_stops=1, n_candidates=2)
+    stub._object_fifo_depth_constraints()
+    model.update()
+
+    var_names = {v.VarName for v in model.getVars()}
+    lc_vars = [n for n in var_names if n.startswith("fifo_lc_")]
+    assert len(lc_vars) >= 1, f"Expected fifo_lc_ vars in variable mode, got: {var_names}"
+
+
+def test_fifo_depth_variable_creates_bigm_constraints(model):
+    """With candidate-indexed tiles_needed_levels, fifo_lc_ big-M constraints exist."""
+    stub, tr, tensor, core = _make_fifo_bd_stub(model, n_stops=1, n_candidates=2)
+    stub._object_fifo_depth_constraints()
+    model.update()
+
+    constr_names = {c.ConstrName for c in model.getConstrs()}
+    lc_ub_expr = [n for n in constr_names if n.startswith("fifo_lc_ub_expr_")]
+    lc_ub_m = [n for n in constr_names if n.startswith("fifo_lc_ub_m_")]
+    lc_lb = [n for n in constr_names if n.startswith("fifo_lc_lb_")]
+
+    assert len(lc_ub_expr) >= 1, f"Missing fifo_lc_ub_expr_ constraints: {constr_names}"
+    assert len(lc_ub_m) >= 1, f"Missing fifo_lc_ub_m_ constraints: {constr_names}"
+    assert len(lc_lb) >= 1, f"Missing fifo_lc_lb_ constraints: {constr_names}"
+
+
+def test_fifo_depth_double_buffering_increases_m(model):
+    """force_double_buffering=True adds +1 to M bound, reflected in lc var upper bound."""
+    stub_no_db, _, _, _ = _make_fifo_bd_stub(model, n_stops=1, n_candidates=2, tiles_needed_scalar=2,
+                                              force_double_buffering=False)
+    stub_no_db._object_fifo_depth_constraints()
+    model.update()
+    lc_no_db = [v for v in model.getVars() if v.VarName.startswith("fifo_lc_")]
+    ub_no_db = max(v.UB for v in lc_no_db) if lc_no_db else None
+
+    model2 = gp.Model()
+    model2.setParam("OutputFlag", 0)
+    stub_db, _, _, _ = _make_fifo_bd_stub(model2, n_stops=1, n_candidates=2, tiles_needed_scalar=2,
+                                           force_double_buffering=True)
+    stub_db._object_fifo_depth_constraints()
+    model2.update()
+    lc_db = [v for v in model2.getVars() if v.VarName.startswith("fifo_lc_")]
+    ub_db = max(v.UB for v in lc_db) if lc_db else None
+
+    assert ub_no_db is not None and ub_db is not None
+    assert ub_db == ub_no_db + 1, (
+        f"Expected double-buffering M = no-db M + 1, got {ub_db} vs {ub_no_db}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Tests for _buffer_descriptor_constraints (Task 2 RED)
+# ---------------------------------------------------------------------------
+
+
+def test_bd_depth_scalar_no_lc_vars(model):
+    """With scalar bds_needed_levels, no bd_lc_* auxiliary variables are created."""
+    stub, tr, tensor, core = _make_fifo_bd_stub(
+        model, n_stops=1, bds_needed_scalar=3, core_type="memory"
+    )
+    stub._buffer_descriptor_constraints()
+    model.update()
+
+    var_names = {v.VarName for v in model.getVars()}
+    lc_vars = [n for n in var_names if n.startswith("bd_lc_")]
+    assert len(lc_vars) == 0, f"Expected no bd_lc_ vars in scalar mode, got: {lc_vars}"
+
+
+def test_bd_depth_variable_creates_lc_vars(model):
+    """With candidate-indexed bds_needed_levels (2 candidates), bd_lc_ vars are created."""
+    stub, tr, tensor, core = _make_fifo_bd_stub(
+        model, n_stops=1, n_candidates=2, core_type="memory"
+    )
+    stub._buffer_descriptor_constraints()
+    model.update()
+
+    var_names = {v.VarName for v in model.getVars()}
+    lc_vars = [n for n in var_names if n.startswith("bd_lc_")]
+    assert len(lc_vars) >= 1, f"Expected bd_lc_ vars in variable mode, got: {var_names}"
+
+
+def test_bd_depth_variable_creates_bigm_constraints(model):
+    """With candidate-indexed bds_needed_levels, bd_lc_ big-M constraints exist."""
+    stub, tr, tensor, core = _make_fifo_bd_stub(
+        model, n_stops=1, n_candidates=2, core_type="memory"
+    )
+    stub._buffer_descriptor_constraints()
+    model.update()
+
+    constr_names = {c.ConstrName for c in model.getConstrs()}
+    lc_ub_expr = [n for n in constr_names if n.startswith("bd_lc_ub_expr_")]
+    lc_ub_m = [n for n in constr_names if n.startswith("bd_lc_ub_m_")]
+    lc_lb = [n for n in constr_names if n.startswith("bd_lc_lb_")]
+
+    assert len(lc_ub_expr) >= 1, f"Missing bd_lc_ub_expr_ constraints: {constr_names}"
+    assert len(lc_ub_m) >= 1, f"Missing bd_lc_ub_m_ constraints: {constr_names}"
+    assert len(lc_lb) >= 1, f"Missing bd_lc_lb_ constraints: {constr_names}"
+
+
+# ---------------------------------------------------------------------------
+# Degenerate single-candidate regression test (Task 2 RED)
+# ---------------------------------------------------------------------------
+
+
+def test_degenerate_ssis_single_candidate_feasible(model):
+    """Single-candidate search space: model is feasible with correct fire/reuse values.
+
+    Verifies that linearized constraints with 1 candidate degenerate correctly
+    to the equivalent scalar baseline.
+    """
+    from stream.opt.allocation.constraint_optimization.transfer_and_tensor_allocation import (
+        TransferAndTensorAllocator,
+    )
+    from stream.workload.workload import Tensor
+
+    # One-stop SSIS, one candidate, fires=4 sf=1, tiles_needed=2, bds_needed=3
+    fires_k = 4
+    sf_k = 1
+    tn_k = 2
+    bn_k = 3
+
+    jw = model.addVar(vtype=GRB.BINARY, name="jw_deg")
+    # One-hot: jw must be 1
+    model.addConstr(jw == 1, name="jw_onehot")
+
+    z = model.addVar(vtype=GRB.BINARY, name="z_deg")
+    # Only one stop level (-1), force it to be selected
+    model.addConstr(z == 1, name="z_selected")
+    model.update()
+
+    # Build stub manually for fire/reuse rate + fifo + bd
+    stub = types.SimpleNamespace()
+    stub.model = model
+
+    from stream.hardware.architecture.core import Core
+    tensor = MagicMock(spec=Tensor)
+    tensor.name = "deg_tensor"
+    tr = MagicMock()
+    tr.name = "tr_deg"
+    tr.inputs = [tensor]
+    tr.outputs = [tensor]
+    stub.transfer_nodes = [tr]
+
+    ssis_mock = MagicMock()
+    ssis_mock.get_applicable_temporal_variables.return_value = []  # n_stops=0, only stop=-1
+    stub.ssis = {tr: ssis_mock}
+
+    stub.z_stop = {(tensor, -1): z}
+
+    # Variable tile mode: single candidate
+    stub.reuse_levels = {(tensor, -1): [(fires_k, sf_k, jw)]}
+    stub.tiles_needed_levels = {(tensor, -1): [(tn_k, jw)]}
+    stub.bds_needed_levels = {(tensor, -1): [(bn_k, jw)]}
+    stub._ssis_max_coefficients = {
+        (tensor, -1): {
+            "fires": fires_k,
+            "size_factor": sf_k,
+            "tiles_needed": tn_k,
+            "bds_needed": bn_k,
+        }
+    }
+
+    stub.offchip_core_id = 999
+    stub.force_double_buffering = False
+    stub.context = MagicMock()
+
+    core = MagicMock(spec=Core)
+    core.id = 1
+    core.type = "memory"
+
+    u = model.addVar(vtype=GRB.BINARY, name="u_deg")
+    model.addConstr(u == 1, name="u_deg_fixed")
+    model.update()
+    stub.tensor_core_indicator = {}
+    stub._tensor_uses_core_var = lambda t, c: u
+    stub._candidate_cores_for_tensor = lambda t: {core}
+
+    from collections import defaultdict
+    stub.fires = {}
+    stub.reuse_factors = {}
+    stub.object_fifo_depth = defaultdict(gp.LinExpr)
+    stub.bd_depth = defaultdict(gp.LinExpr)
+
+    # Bind all methods
+    stub._add_binary_product = TransferAndTensorAllocator._add_binary_product.__get__(stub)
+    stub._safe_name = TransferAndTensorAllocator._safe_name.__get__(stub)
+    stub._transfer_fire_rate_constraints = (
+        TransferAndTensorAllocator._transfer_fire_rate_constraints.__get__(stub)
+    )
+    stub._reuse_factor_rate_constraints = (
+        TransferAndTensorAllocator._reuse_factor_rate_constraints.__get__(stub)
+    )
+    stub._object_fifo_depth_constraints = (
+        TransferAndTensorAllocator._object_fifo_depth_constraints.__get__(stub)
+    )
+    stub._buffer_descriptor_constraints = (
+        TransferAndTensorAllocator._buffer_descriptor_constraints.__get__(stub)
+    )
+
+    # Execute all constraint methods
+    stub._transfer_fire_rate_constraints()
+    stub._reuse_factor_rate_constraints()
+    stub._object_fifo_depth_constraints()
+    stub._buffer_descriptor_constraints()
+    model.update()
+
+    # Add objective (minimize nothing — just feasibility)
+    model.setObjective(0)
+    model.optimize()
+
+    assert model.Status == GRB.OPTIMAL, f"Model infeasible, status={model.Status}"
+
+    # With jw=1 and z=1: fires should equal fires_k=4, reuse_factor should equal sf_k=1
+    fires_var = stub.fires[tr]
+    rf_var = stub.reuse_factors[tr]
+    assert abs(fires_var.X - fires_k) < 1e-6, f"Expected fires={fires_k}, got {fires_var.X}"
+    assert abs(rf_var.X - sf_k) < 1e-6, f"Expected reuse_factor={sf_k}, got {rf_var.X}"
