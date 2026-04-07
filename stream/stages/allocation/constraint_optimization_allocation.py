@@ -7,6 +7,7 @@ from stream.datatypes import LayerDim
 from stream.hardware.architecture.accelerator import Accelerator
 from stream.mapping.mapping import Mapping
 from stream.opt.allocation.constraint_optimization.config import ConstraintOptStageConfig
+from stream.opt.search_space import SearchSpace
 from stream.stages.context import StageContext
 from stream.stages.stage import Stage, StageCallable
 from stream.workload.workload import Workload
@@ -53,6 +54,7 @@ class ConstraintOptimizationAllocationStage(Stage):
         self.config = config
 
         self.output_path = self.ctx.get("output_path")
+        self.search_space: SearchSpace | None = self.ctx.get("search_space")
 
     def run(self):
         logger.info("Start ConstraintOptimizationAllocationStage.")
@@ -76,6 +78,7 @@ class ConstraintOptimizationAllocationStage(Stage):
             self.cost_lut,
             self.config.transfer.nb_cols_to_use,
             output_path,
+            search_space=self.search_space,
         )
         workload = scheduler.run()
         return workload, scheduler

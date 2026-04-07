@@ -19,6 +19,7 @@ from stream.opt.allocation.constraint_optimization.context import (
     TransferAndTensorContext,
     build_transfer_context,
 )
+from stream.opt.search_space import SearchSpace
 from stream.opt.allocation.constraint_optimization.timeslot_allocation import (
     _resource_key,
 )
@@ -72,6 +73,7 @@ class TransferAndTensorAllocator:
         nb_cols_to_use: int = 4,
         output_path: str = "",
         context: TransferAndTensorContext | None = None,
+        search_space: SearchSpace | None = None,
     ):
         self.workload = workload
         self.slot_of = timeslots
@@ -86,6 +88,7 @@ class TransferAndTensorAllocator:
         self.mapping = mapping
         self.cost_lut = cost_lut
         self.output_path = output_path
+        self.search_space = search_space
 
         self.max_slot = max(timeslots.values()) if timeslots else 0
         self.big_m = big_m or len(workload.nodes()) + 5

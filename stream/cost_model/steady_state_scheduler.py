@@ -39,6 +39,7 @@ from stream.workload.steady_state.iteration_space import (
     Reuse,
     SteadyStateIterationSpace,
 )
+from stream.opt.search_space import SearchSpace
 from stream.workload.utils import generate_steady_state_iteration_spaces, get_equivalent_dimension
 from stream.workload.workload import Workload
 
@@ -55,6 +56,7 @@ class SteadyStateScheduler:
         cost_lut: CoreCostLUT,
         nb_cols_to_use: int = 4,
         output_path: str = "",
+        search_space: SearchSpace | None = None,
     ):
         """
         Initialize the SteadyStateScheduler with the allocation and accelerator.
@@ -77,6 +79,7 @@ class SteadyStateScheduler:
         self.overlap_between_iterations = -1
 
         self.nb_cols_to_use = nb_cols_to_use
+        self.search_space = search_space
 
         self.output_path = output_path
         if self.output_path:
@@ -119,6 +122,7 @@ class SteadyStateScheduler:
             cost_lut=self.cost_lut,
             nb_cols_to_use=self.nb_cols_to_use,
             output_path=self.output_path,
+            search_space=self.search_space,
         )
         (
             tensor_reuse_levels,
