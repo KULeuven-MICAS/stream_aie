@@ -707,6 +707,11 @@ def _make_fire_helpers_stub(
     stub._init_transfer_fire_helpers = (
         TransferAndTensorAllocator._init_transfer_fire_helpers.__get__(stub)
     )
+    stub._classify_transfer_nodes_for_firing_optimization = (
+        TransferAndTensorAllocator._classify_transfer_nodes_for_firing_optimization.__get__(stub)
+    )
+    # Pre-populate transfer_nodes_to_optimize_firings_for (normally done in __init__)
+    stub._classify_transfer_nodes_for_firing_optimization()
     return stub, trs
 
 
