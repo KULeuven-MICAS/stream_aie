@@ -376,3 +376,247 @@ def test_joint_candidates_no_tiled_dims_returns_empty(model):
     assert results == []
     # _tensor_max_size should still be set via fallback scalar path
     assert tensor in stub._tensor_max_size
+
+
+# ---------------------------------------------------------------------------
+# Helpers for memory capacity constraint tests
+# ---------------------------------------------------------------------------
+
+
+def _make_mem_constraint_stub(
+    model: gp.Model,
+    search_space: SearchSpace | None,
+    tensor_size: int,
+    size_factor: float,
+    n_stops: int = 1,
+    joint_candidates: list[tuple[int, gp.Var]] | None = None,
+    tensor_max_size: int | None = None,
+):
+    """Build a stub ready for _memory_capacity_constraints tests.
+
+    Pre-wires a single transfer node, single output tensor, and single core.
+    joint_candidates overrides _joint_candidates_for_tensor when provided.
+    """
+    from collections import defaultdict
+    from math import ceil
+
+    from stream.opt.allocation.constraint_optimization.transfer_and_tensor_allocation import (
+        TransferAndTensorAllocator,
+    )
+
+    stub = types.SimpleNamespace()
+    stub.model = model
+    stub.search_space = search_space
+    stub.w = {}
+    stub.tile_var = {}
+    stub._tensor_max_size = {}
+    stub._tensor_joint_candidates = {}
+
+    # Bind helpers
+    stub._add_binary_product = TransferAndTensorAllocator._add_binary_product.__get__(stub)
+    stub._safe_name = TransferAndTensorAllocator._safe_name.__get__(stub)
+    stub._joint_candidates_for_tensor = TransferAndTensorAllocator._joint_candidates_for_tensor.__get__(stub)
+    stub._tiled_dims_for_tensor = TransferAndTensorAllocator._tiled_dims_for_tensor.__get__(stub)
+    stub._joint_binary_for_combo = TransferAndTensorAllocator._joint_binary_for_combo.__get__(stub)
+
+    # Build a Core mock using spec=Core so isinstance(core, Core) passes
+    from stream.hardware.architecture.core import Core
+    core = MagicMock(spec=Core)
+    core.id = 42  # needed by _resource_key(core) -> f"Core {res.id}"
+    core.get_memory_capacity.return_value = 2**30  # large cap, no infeasibility
+    stub._core = core
+
+    # Build a Tensor mock
+    from stream.workload.workload import Tensor
+    tensor = MagicMock(spec=Tensor)
+    tensor.name = "test_tensor"
+    tensor.size_bits.return_value = tensor_size
+    stub._tensor = tensor
+
+    # Workload mock for get_tensor_of_transfer_to_single_core
+    scalar_tensor = MagicMock()
+    scalar_tensor.size_bits.return_value = tensor_size
+    workload = MagicMock()
+    workload.get_tensor_of_transfer_to_single_core.return_value = scalar_tensor
+    stub.workload = workload
+
+    # Transfer node mock
+    tr = MagicMock()
+    tr.outputs = [tensor]
+    stub.transfer_nodes = [tr]
+    stub._tr = tr
+
+    # SSIS mock for get_applicable_temporal_variables
+    ssis_mock = MagicMock()
+    temporal_vars = [MagicMock()] * n_stops
+    ssis_mock.get_applicable_temporal_variables.return_value = temporal_vars
+    stub.ssis = {tr: ssis_mock}
+
+    # reuse_levels: stop==-1 always present + n_stops more stops
+    stub.reuse_levels = {}
+    for s in range(-1, n_stops):
+        stub.reuse_levels[(tensor, s)] = (1, size_factor)
+
+    # z_stop binary variables for (tensor, stop)
+    stub.z_stop = {}
+    for s in range(-1, n_stops):
+        z = model.addVar(vtype=GRB.BINARY, name=f"z_stop_{s}")
+        stub.z_stop[(tensor, s)] = z
+    model.update()
+
+    # _candidate_cores_for_tensor returns {core}
+    stub._candidate_cores_for_tensor = lambda t: {core}
+
+    # _tensor_uses_core_var: returns a fixed binary var
+    u = model.addVar(vtype=GRB.BINARY, name="u_tensor_core")
+    model.addConstr(u == 1, name="u_fixed")  # always uses this core for tests
+    model.update()
+    stub.tensor_core_indicator = {}
+    stub._tensor_uses_core_var = lambda t, c: u
+    stub._u = u
+
+    # Override joint candidates if provided
+    if joint_candidates is not None:
+        stub._tensor_joint_candidates[tensor] = joint_candidates
+        if tensor_max_size is not None:
+            stub._tensor_max_size[tensor] = tensor_max_size
+        elif joint_candidates:
+            stub._tensor_max_size[tensor] = max(sz for sz, _ in joint_candidates)
+
+    # Bind _memory_capacity_constraints
+    stub._memory_capacity_constraints = (
+        TransferAndTensorAllocator._memory_capacity_constraints.__get__(stub)
+    )
+
+    stub.mapping = MagicMock()
+
+    return stub
+
+
+# ---------------------------------------------------------------------------
+# Tests for _memory_capacity_constraints rewrite
+# ---------------------------------------------------------------------------
+
+
+def test_memory_constraint_uses_load_contrib(model):
+    """With search_space set and 2 candidates, verify lc_* vars and constraints exist."""
+    ss = _build_search_space({0: [16, 32]})
+
+    # Build 2 joint candidate (size, binary_var) pairs
+    jw0 = model.addVar(vtype=GRB.BINARY, name="jw0")
+    jw1 = model.addVar(vtype=GRB.BINARY, name="jw1")
+    model.update()
+    joint_candidates = [(1024, jw0), (512, jw1)]
+
+    stub = _make_mem_constraint_stub(
+        model,
+        search_space=ss,
+        tensor_size=1024,
+        size_factor=1.0,
+        n_stops=1,
+        joint_candidates=joint_candidates,
+        tensor_max_size=1024,
+    )
+    stub._memory_capacity_constraints()
+    model.update()
+
+    var_names = {v.VarName for v in model.getVars()}
+    constr_names = {c.ConstrName for c in model.getConstrs()}
+
+    # Verify load_contrib variable exists
+    lc_vars = [n for n in var_names if n.startswith("lc_")]
+    assert len(lc_vars) >= 1, f"Expected lc_* vars, got: {var_names}"
+
+    # Verify big-M activation constraints
+    lc_ub_expr = [n for n in constr_names if n.startswith("lc_ub_expr_")]
+    lc_ub_m = [n for n in constr_names if n.startswith("lc_ub_m_")]
+    lc_lb = [n for n in constr_names if n.startswith("lc_lb_")]
+    assert len(lc_ub_expr) >= 1, f"Missing lc_ub_expr constraints, got: {constr_names}"
+    assert len(lc_ub_m) >= 1, f"Missing lc_ub_m constraints, got: {constr_names}"
+    assert len(lc_lb) >= 1, f"Missing lc_lb constraints, got: {constr_names}"
+
+
+def test_memory_constraint_scalar_fallback(model):
+    """With search_space=None, no lc_* variables are created."""
+    stub = _make_mem_constraint_stub(
+        model,
+        search_space=None,
+        tensor_size=1024,
+        size_factor=1.0,
+        n_stops=1,
+    )
+    stub._memory_capacity_constraints()
+    model.update()
+
+    var_names = {v.VarName for v in model.getVars()}
+    lc_vars = [n for n in var_names if n.startswith("lc_")]
+    assert len(lc_vars) == 0, f"Expected no lc_* vars in scalar fallback, got: {lc_vars}"
+
+    # mem_cap constraint must still exist
+    constr_names = {c.ConstrName for c in model.getConstrs()}
+    mem_cap = [n for n in constr_names if n.startswith("mem_cap_")]
+    assert len(mem_cap) >= 1, "Expected mem_cap_ constraint in scalar fallback"
+
+
+def test_tight_bigm_not_legacy(model):
+    """Big-M for load_contrib upper bound equals ceil(size_factor * max_tensor_size)."""
+    from math import ceil
+
+    ss = _build_search_space({0: [16, 32]})
+    size_factor = 2.0
+
+    jw0 = model.addVar(vtype=GRB.BINARY, name="jw0_bm")
+    jw1 = model.addVar(vtype=GRB.BINARY, name="jw1_bm")
+    model.update()
+    # Two candidate sizes: 1024 and 512; max is 1024
+    joint_candidates = [(1024, jw0), (512, jw1)]
+    max_size = 1024
+    legacy_bigm = 10  # simulated len(nodes)+5 value, smaller than tight M
+
+    stub = _make_mem_constraint_stub(
+        model,
+        search_space=ss,
+        tensor_size=1024,
+        size_factor=size_factor,
+        n_stops=0,  # only stop=-1
+        joint_candidates=joint_candidates,
+        tensor_max_size=max_size,
+    )
+    stub._memory_capacity_constraints()
+    model.update()
+
+    # Find lc_* variables and check their upper bound
+    lc_vars = [v for v in model.getVars() if v.VarName.startswith("lc_")]
+    assert len(lc_vars) >= 1, "No lc_* variable found"
+
+    expected_M = ceil(size_factor * max_size)  # = ceil(2.0 * 1024) = 2048
+    assert expected_M != legacy_bigm, "Test setup: M must differ from legacy value"
+    for lc in lc_vars:
+        assert lc.UB == expected_M, (
+            f"Expected lc.UB == {expected_M} (tight), got {lc.UB} (legacy would be {legacy_bigm})"
+        )
+
+
+def test_single_candidate_regression_compat(model):
+    """With 1 candidate per dim, model is feasible and w[dim,0].X == 1."""
+    ss = _build_search_space({0: [16]})
+    stub = _make_allocator_stub(model, ss)
+    stub._TransferAndTensorAllocator__create_tile_selection_vars()
+    model.update()
+
+    # Verify w[(dim,0)] exists and has the right type
+    d0 = _dim(0)
+    assert (d0, 0) in stub.w
+    w_var = stub.w[(d0, 0)]
+    assert w_var.VType == GRB.BINARY
+
+    # Force the one-hot: with 1 candidate, w[d0,0] must be 1
+    model.optimize()
+    assert model.Status == GRB.OPTIMAL or model.Status == GRB.SUBOPTIMAL
+    model.update()
+    # The one-hot constraint forces w[d0,0] == 1
+    assert abs(w_var.X - 1.0) < 1e-6, f"Expected w[dim,0].X == 1.0, got {w_var.X}"
+
+    # tile_var[d0] should equal the single tile size (16)
+    tile_v = stub.tile_var[d0]
+    assert abs(tile_v.X - 16.0) < 1e-6, f"Expected tile_var[dim].X == 16.0, got {tile_v.X}"
