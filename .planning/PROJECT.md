@@ -26,11 +26,11 @@ Enable the constraint optimizer to explore variable tile sizes across workload d
 
 - [ ] Baseline validation with per-dimension tile sizes (BIG BOY: 256x2048x8192, tiles 16/128/32)
 - [ ] User-defined list of possible tile sizes as CO input
-- [ ] Variable tensor sizes in CO (dependent on selected tile)
+- [x] Variable tensor sizes in CO (dependent on selected tile) — Validated in Phase 3
 - [ ] Variable ComputationNode sizes in CO
 - [ ] Variable transfer sizes in CO
 - [ ] Variable SSIS loop sizes (kernel and temporal) in CO
-- [ ] CO selects optimal tile size per unique workload dimension
+- [x] CO selects optimal tile size per unique workload dimension — Validated in Phase 3 (w[dim,k] binary selection variables)
 
 ### Out of Scope
 
@@ -94,4 +94,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-04-02 after milestone v2.0 initialization*
+*Last updated: 2026-04-07 after Phase 3 completion — tile selection variables + memory constraints*
