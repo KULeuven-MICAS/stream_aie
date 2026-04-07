@@ -16,7 +16,7 @@ Requirements for variable tile size optimization milestone. Each maps to roadmap
 
 - [ ] **TILE-01**: User can specify a single list of candidate tile sizes as input to the optimization
 - [ ] **TILE-02**: Utility functions compute tensor sizes per candidate tile for each unique dimension on demand (tensor_size_bits wrapper)
-- [ ] **TILE-03**: One-hot binary selection variables (w[dim, k]) added to CO model with SOS1 constraints for each unique workload dimension
+- [x] **TILE-03**: One-hot binary selection variables (w[dim, k]) added to CO model with SOS1 constraints for each unique workload dimension
 - [ ] **TILE-04**: Candidate tile sizes are pre-filtered for divisibility against each workload dimension and memory feasibility
 - [x] **TILE-05**: Utility functions compute SSIS loop sizes, reuse levels, and transfer sizes per candidate tile (added incrementally in Phases 3-5 as each CO constraint type needs them)
 
@@ -64,7 +64,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | TILE-01 | Phase 2 | Pending |
 | TILE-02 | Phase 2 | Pending |
 | TILE-04 | Phase 2 | Pending |
-| TILE-03 | Phase 3 | Pending |
+| TILE-03 | Phase 3 | Complete |
 | TILE-05 | Phases 3-5 | Complete |
 | CO-01 | Phase 3 | Pending |
 | CO-05 | Phase 3 | Pending |

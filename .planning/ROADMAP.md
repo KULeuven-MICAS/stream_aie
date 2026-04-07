@@ -60,8 +60,8 @@ Plans:
 **UI hint**: no
 **Plans**: 3 plans
 Plans:
-- [ ] 03-01-PLAN.md — Thread SearchSpace through CO pipeline, add tensor_size_bits_for_candidate and max_tensor_size_bits utilities
-- [ ] 03-02-PLAN.md — Add w[dim,k] binary variables, tile_var[dim] INTEGER variables, joint candidate enumeration
+- [x] 03-01-PLAN.md — Thread SearchSpace through CO pipeline, add tensor_size_bits_for_candidate and max_tensor_size_bits utilities
+- [x] 03-02-PLAN.md — Add w[dim,k] binary variables, tile_var[dim] INTEGER variables, joint candidate enumeration
 - [ ] 03-03-PLAN.md — Rewrite _memory_capacity_constraints with continuous auxiliaries, tight big-M, regression verification
 
 ### Phase 4: Variable SSIS + FIFO Constraints
@@ -105,7 +105,7 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6
 |-------|----------------|--------|-----------|
 | 1. Baseline Validation | 0/2 | Planning complete | - |
 | 2. TileSizeLUT Infrastructure | 0/2 | Planning complete | - |
-| 3. Tile Selection Variables + Memory Constraints | 0/3 | Planning complete | - |
+| 3. Tile Selection Variables + Memory Constraints | 2/3 | In Progress|  |
 | 4. Variable SSIS + FIFO Constraints | 0/? | Not started | - |
 | 5. Variable Transfer Latency | 0/? | Not started | - |
 | 6. Pipeline Integration + E2E Validation | 0/? | Not started | - |
