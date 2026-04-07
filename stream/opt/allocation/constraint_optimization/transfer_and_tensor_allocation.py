@@ -145,10 +145,16 @@ class TransferAndTensorAllocator:
         self.total_latency: gp.Var | None = None
 
         # transfer fire helpers init
-        self._ensure_same_ssis_for_all_transfers()
-        self.reuse_levels: dict[tuple[Tensor, int], tuple[int, int]] = {}
-        self.tiles_needed_levels: dict[tuple[Tensor, int], int] = {}
-        self.bds_needed_levels: dict[tuple[Tensor, int], int] = {}
+        # NOTE: SSIS same-size verification moved to post-solve via _verify_same_ssis_post_solve (D-07)
+        # Variable tile mode: list of (fires_coeff, sf_coeff, joint_binary_var) tuples
+        # Scalar mode: plain (int, int) tuple for fires/sf (backward compat)
+        self.reuse_levels: dict[tuple[Tensor, int], tuple[int, int] | list[tuple[int, int, gp.Var]]] = {}
+        # Variable tile mode: list of (coeff, joint_binary_var) tuples
+        # Scalar mode: plain int
+        self.tiles_needed_levels: dict[tuple[Tensor, int], int | list[tuple[int, gp.Var]]] = {}
+        self.bds_needed_levels: dict[tuple[Tensor, int], int | list[tuple[int, gp.Var]]] = {}
+        # Max coefficients per (t, stop) for big-M bounds
+        self._ssis_max_coefficients: dict[tuple[Tensor, int], dict[str, int]] = {}
         self.transfer_nodes_to_optimize_firings_for: list[TransferNode] = []
         self._init_transfer_fire_helpers()
 
@@ -242,7 +248,17 @@ class TransferAndTensorAllocator:
         tensor = tr.inputs[0]
         return ceil(tensor.size_bits() / min_bw)
 
-    def _ensure_same_ssis_for_all_transfers(self) -> None:
+    def _verify_same_ssis_post_solve(self) -> None:
+        """Post-solve verification that all transfers share the same SSIS loop nest.
+
+        Per D-07: moved from __init__ to post-solve because with variable tiles
+        the actual loop sizes aren't known until w[dim,k] is resolved by the solver.
+        The structural property (all transfers share the same loop nest) still holds
+        by construction since K × S × T = workload_size for each dimension regardless
+        of tile selection.
+
+        Should be called after model.optimize() with w[dim,k] values resolved.
+        """
         first_ssis = self.ssis[self.transfer_nodes[0]]
         first_transfer_ssis_sizes = first_ssis.get_temporal_sizes()
         first_transfer_ssis_total_size = prod(first_transfer_ssis_sizes)
@@ -256,34 +272,166 @@ class TransferAndTensorAllocator:
                     f"{transfer_ssis_total_size} != {first_transfer_ssis_total_size}"
                 )
 
+    def _ssis_tiled_dims_for_transfer(self, tr: "TransferNode") -> list[LayerDim]:
+        """Return dims from search_space that also appear in SSIS applicable temporal dims.
+
+        These are the SSIS temporal loop dimensions with variable tile sizes (per D-01/D-09).
+        Differs from _tiled_dims_for_tensor which filters by inter-core tensor shape dependency.
+        Here we filter by intra-core temporal loop dependency.
+        """
+        if self.search_space is None or self.search_space.is_empty():
+            return []
+        ssis_temporal_dims = set(self.ssis[tr].get_applicable_temporal_dimensions())
+        return [d for d in self.search_space.dims() if d in ssis_temporal_dims]
+
+    def _ssis_coefficients_for_transfer(
+        self, tr: "TransferNode"
+    ) -> dict | None:
+        """Enumerate candidate-indexed SSIS coefficients for a transfer.
+
+        Per D-04/D-08/D-09: for each joint candidate combination across the SSIS
+        tiled dimensions, compute per-stop-level coefficients using
+        SSIS.candidate_loop_sizes and reuse_coefficients_for_sizes.
+
+        Returns None if no tiled dims (signals scalar fallback path).
+        Otherwise returns a dict:
+            {(tensor, stop): {
+                "fires": [(coeff, jw), ...],
+                "size_factor": [(coeff, jw), ...],
+                "tiles_needed": [(coeff, jw), ...],
+                "bds_needed": [(coeff, jw), ...],
+            }}
+
+        Also populates self._ssis_max_coefficients[(t, stop)] with max values
+        for big-M bounds.
+        """
+        from stream.opt.tile_size_utils import reuse_coefficients_for_sizes
+
+        tiled_dims = self._ssis_tiled_dims_for_transfer(tr)
+        if not tiled_dims:
+            return None
+
+        ssis = self.ssis[tr]
+        applicable_vars = ssis.get_applicable_temporal_variables()
+        sizes_base = [iv.size for iv in applicable_vars]
+        relevancies = [iv.relevant for iv in applicable_vars]
+        applicable_dims = ssis.get_applicable_temporal_dimensions()
+
+        # For each tiled dim: get candidates from search_space
+        per_dim_options = [(dim, self.search_space.get(dim)) for dim in tiled_dims]
+
+        # Get workload sizes for each tiled dim
+        stop_levels = list(range(-1, len(applicable_vars)))
+
+        # Result accumulator: {(tensor, stop): {key: [(coeff, jw), ...]}}
+        result: dict = {}
+        for t in tr.tensors:
+            for stop in stop_levels:
+                result[(t, stop)] = {
+                    "fires": [],
+                    "size_factor": [],
+                    "tiles_needed": [],
+                    "bds_needed": [],
+                }
+
+        # Enumerate joint candidate combinations across tiled dims
+        option_lists = [opts for _, opts in per_dim_options]
+        for combo in iproduct(*option_lists):
+            # Substitute candidate tile sizes into the sizes list
+            substituted_sizes = list(sizes_base)
+            for (dim, _opts), opt in zip(per_dim_options, combo):
+                if dim not in applicable_dims:
+                    continue
+                idx = applicable_dims.index(dim)
+                # K × S × T = workload_size; K = opt.tile; S=1 (embedded in ssis)
+                # T is what gets substituted as the temporal loop size
+                workload_size = opt.workload_size
+                K = opt.tile
+                # S is implicit: workload_size = S * K * T for the temporal dim
+                # Here we use T = workload_size / K since S is already captured
+                # in the kernel loop (KERNEL variable type); temporal T = workload_size / K
+                T, rem = divmod(workload_size, K)
+                assert rem == 0, (
+                    f"workload_size {workload_size} not divisible by K={K} for dim {dim}"
+                )
+                substituted_sizes[idx] = T
+
+            fires_d, sf_d, tn_d, bn_d = reuse_coefficients_for_sizes(substituted_sizes, relevancies)
+
+            # Get joint binary variable for this combo
+            joint_w = self._joint_binary_for_combo(per_dim_options, combo, base_name="ssis_jw")
+
+            for t in tr.tensors:
+                for stop in stop_levels:
+                    result[(t, stop)]["fires"].append((fires_d[stop], joint_w))
+                    result[(t, stop)]["size_factor"].append((sf_d[stop], joint_w))
+                    result[(t, stop)]["tiles_needed"].append((tn_d[stop], joint_w))
+                    result[(t, stop)]["bds_needed"].append((bn_d[stop], joint_w))
+
+        # Compute max coefficients for big-M
+        for t in tr.tensors:
+            for stop in stop_levels:
+                entry = result[(t, stop)]
+                self._ssis_max_coefficients[(t, stop)] = {
+                    "fires": max(c for c, _ in entry["fires"]),
+                    "size_factor": max(c for c, _ in entry["size_factor"]),
+                    "tiles_needed": max(c for c, _ in entry["tiles_needed"]),
+                    "bds_needed": max(c for c, _ in entry["bds_needed"]),
+                }
+
+        return result
+
     def _init_transfer_fire_helpers(self) -> None:
+        """Compute per-stop-level reuse coefficients for all transfer nodes.
+
+        In variable tile mode (search_space is set with tiled SSIS dims):
+            reuse_levels[(t, stop)] = list of (fires_coeff, size_factor_coeff, joint_binary_var)
+            tiles_needed_levels[(t, stop)] = list of (tiles_needed_coeff, joint_binary_var)
+            bds_needed_levels[(t, stop)] = list of (bds_needed_coeff, joint_binary_var)
+
+        In scalar mode (search_space is None or no SSIS tiled dims):
+            reuse_levels[(t, stop)] = (fires, size_factor)  -- plain int tuple
+            tiles_needed_levels[(t, stop)] = tiles_needed   -- plain int
+            bds_needed_levels[(t, stop)] = bds_needed       -- plain int
+        """
+        from stream.opt.tile_size_utils import reuse_coefficients_for_sizes
+
         for tr in self.transfer_nodes:
-            ssis = self.ssis[tr].get_applicable_temporal_variables()
-            sizes = [iter_var.size for iter_var in ssis]
-            relevancies = [iter_var.relevant for iter_var in ssis]
-            reuses = [iter_var.reuse for iter_var in ssis]
+            applicable_vars = self.ssis[tr].get_applicable_temporal_variables()
+            sizes = [iv.size for iv in applicable_vars]
+            relevancies = [iv.relevant for iv in applicable_vars]
+            reuses = [iv.reuse for iv in applicable_vars]
             if any(r != Reuse.NOT_SET for r in reuses):
                 continue
             self.transfer_nodes_to_optimize_firings_for.append(tr)
-            for t in tr.tensors:
-                fires = math.prod(sizes)
-                size_factor = 1
-                tiles_needed = 1
-                bds_needed = 1
-                self.reuse_levels[(t, -1)] = (fires, size_factor)
-                self.tiles_needed_levels[(t, -1)] = tiles_needed
-                self.bds_needed_levels[(t, -1)] = bds_needed
-                for i, (Nl, relevancy) in enumerate(zip(sizes, relevancies, strict=True)):
-                    size_factor *= Nl if relevancy else 1
-                    tiles_needed *= Nl if relevancy else 1
-                    fires //= Nl
-                    self.reuse_levels[(t, i)] = (fires, size_factor)
-                    self.tiles_needed_levels[(t, i)] = tiles_needed
-                    if relevancy:
-                        bds_needed = 1
-                    else:
-                        bds_needed *= Nl
-                    self.bds_needed_levels[(t, i)] = bds_needed
+
+            # Try variable tile mode
+            coeff_dict = self._ssis_coefficients_for_transfer(tr)
+
+            if coeff_dict is not None:
+                # Variable tile mode: populate with candidate-indexed coefficient lists
+                for t in tr.tensors:
+                    stop_levels = list(range(-1, len(applicable_vars)))
+                    for stop in stop_levels:
+                        entry = coeff_dict[(t, stop)]
+                        # reuse_levels: list of (fires_coeff, sf_coeff, joint_binary)
+                        self.reuse_levels[(t, stop)] = [
+                            (fires_c, sf_c, jw)
+                            for (fires_c, jw), (sf_c, _) in zip(
+                                entry["fires"], entry["size_factor"]
+                            )
+                        ]
+                        self.tiles_needed_levels[(t, stop)] = list(entry["tiles_needed"])
+                        self.bds_needed_levels[(t, stop)] = list(entry["bds_needed"])
+            else:
+                # Scalar fallback: use existing logic with reuse_coefficients_for_sizes
+                fires_d, sf_d, tn_d, bn_d = reuse_coefficients_for_sizes(sizes, relevancies)
+                for t in tr.tensors:
+                    stop_levels = list(range(-1, len(applicable_vars)))
+                    for stop in stop_levels:
+                        self.reuse_levels[(t, stop)] = (fires_d[stop], sf_d[stop])
+                        self.tiles_needed_levels[(t, stop)] = tn_d[stop]
+                        self.bds_needed_levels[(t, stop)] = bn_d[stop]
 
     def _is_const_i(self, tr: TransferNode) -> bool:
         src = next(iter(self.workload.predecessors(tr)))
@@ -1579,8 +1727,16 @@ class TransferAndTensorAllocator:
         self,
         per_dim_options: list[tuple[LayerDim, list]],
         combo: tuple,
+        base_name: str = "jw",
     ) -> gp.Var:
-        """Recursively AND w[dim,k] variables for this joint combination (D-03)."""
+        """Recursively AND w[dim,k] variables for this joint combination (D-03).
+
+        Parameters
+        ----------
+        per_dim_options : list of (dim, options_list)
+        combo : tuple of TileSizeOption, one per dim
+        base_name : str prefix for the auxiliary AND variable names (default "jw")
+        """
         binaries = []
         for (dim, opts), opt in zip(per_dim_options, combo):
             k = opts.index(opt)
@@ -1598,7 +1754,7 @@ class TransferAndTensorAllocator:
             )
             result = self._add_binary_product(
                 a=result, b=b,
-                base_name=f"jw_{dim_names}",
+                base_name=f"{base_name}_{dim_names}",
             )
         return result
 

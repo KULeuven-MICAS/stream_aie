@@ -197,6 +197,10 @@ class SteadyStateIterationSpace:
     # ............................................... basic constructor ....
     def __init__(self, variables: tuple[IterationVariable]) -> None:
         self.variables: tuple[IterationVariable] = tuple(variables)
+        # Tile-aware extensions (D-01/D-03): set after construction by
+        # generate_steady_state_iteration_spaces when a SearchSpace is present.
+        self.search_space = None  # Optional[SearchSpace]
+        self.spatial_unrollings: dict | None = None  # {LayerDim: int}
 
     def __eq__(self, other):
         if not isinstance(other, SteadyStateIterationSpace):
@@ -429,6 +433,49 @@ class SteadyStateIterationSpace:
         Returns the list of relevancies of temporal iteration variables that are applicable to the operand.
         """
         return [iv.relevant for iv in self.get_temporal_variables() if iv.applicable]
+
+    def candidate_loop_sizes(
+        self,
+        dim: "LayerDim",
+        candidates: list[int],
+        workload_size: int,
+        S: int = 1,
+    ) -> dict[int, tuple[int, int]]:
+        """Return {candidate_tile: (K, T)} for each candidate tile on dim.
+
+        Per D-02: K x S x T = workload_size, so T = workload_size / (S * K).
+        Only returns entries for dims that appear as applicable temporal variables
+        in this SSIS.
+
+        Parameters
+        ----------
+        dim : LayerDim
+            The dimension being tiled.
+        candidates : list[int]
+            Candidate tile sizes for this dimension.
+        workload_size : int
+            The full dimension size from the workload.
+        S : int
+            Spatial unrolling factor for this dimension (default 1).
+
+        Returns
+        -------
+        dict[int, tuple[int, int]]
+            {candidate_tile: (K=candidate_tile, T=workload_size/(S*K))}
+            Empty dict if dim is not an applicable temporal dimension in this SSIS.
+        """
+        temporal_dims = self.get_applicable_temporal_dimensions()
+        if dim not in temporal_dims:
+            return {}
+        result = {}
+        for tile in candidates:
+            K = tile
+            T, rem = divmod(workload_size, S * K)
+            assert rem == 0, (
+                f"workload_size {workload_size} not divisible by S*K = {S}*{K} = {S * K}"
+            )
+            result[tile] = (K, T)
+        return result
 
     # ..................................................................... #
     # ── Iteration / pretty printing                                         #

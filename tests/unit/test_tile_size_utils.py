@@ -8,6 +8,8 @@ from stream.opt.tile_size_utils import (
     is_divisible_candidate,
     max_tensor_size_bits,
     passes_single_tensor_memory_check,
+    reuse_coefficients_for_sizes,
+    ssis_loop_sizes_for_candidate,
     tensor_size_bits,
     tensor_size_bits_for_candidate,
 )
@@ -309,3 +311,124 @@ def test_max_tensor_size_bits_empty_candidates():
     workload.get_tensor_shape_with_tiling.assert_called_once_with(tensor, base_tiling)
     tensor.size_bits.assert_called_once_with(shape=(64, 128))
     assert result == 8192
+
+
+# ---------------------------------------------------------------------------
+# Tests for ssis_loop_sizes_for_candidate (D-08/D-09)
+# ---------------------------------------------------------------------------
+
+
+@patch("stream.opt.tile_size_utils.collect_spatial_unrollings")
+def test_ssis_loop_sizes_for_candidate_basic(mock_collect):
+    """Basic: K=candidate, T=workload_size/(S*K) with S=1."""
+    workload = MagicMock()
+    mapping = MagicMock()
+    d = _dim(0)
+
+    # S=1 (no spatial unrolling for dim), workload_size=256, candidate=16
+    # K=16, T=256/(1*16)=16
+    mock_collect.return_value = ({}, [])
+    workload.get_dimension_size.return_value = 256
+
+    K, T = ssis_loop_sizes_for_candidate(d, 16, workload, mapping)
+    assert K == 16
+    assert T == 16
+
+
+@patch("stream.opt.tile_size_utils.collect_spatial_unrollings")
+def test_ssis_loop_sizes_for_candidate_with_spatial_unrolling(mock_collect):
+    """S > 1: T = workload_size / (S * K)."""
+    workload = MagicMock()
+    mapping = MagicMock()
+    d = _dim(1)
+
+    # S=4, workload_size=2048, candidate=128 → K=128, T=2048/(4*128)=4
+    mock_collect.return_value = ({}, [(d, 4)])
+    workload.get_dimension_size.return_value = 2048
+
+    K, T = ssis_loop_sizes_for_candidate(d, 128, workload, mapping)
+    assert K == 128
+    assert T == 4
+
+
+@patch("stream.opt.tile_size_utils.collect_spatial_unrollings")
+def test_ssis_loop_sizes_for_candidate_indivisible_raises(mock_collect):
+    """Indivisible workload_size raises AssertionError."""
+    workload = MagicMock()
+    mapping = MagicMock()
+    d = _dim(0)
+
+    mock_collect.return_value = ({}, [])
+    workload.get_dimension_size.return_value = 256
+
+    with pytest.raises(AssertionError):
+        ssis_loop_sizes_for_candidate(d, 33, workload, mapping)
+
+
+# ---------------------------------------------------------------------------
+# Tests for reuse_coefficients_for_sizes (D-08/D-09)
+# ---------------------------------------------------------------------------
+
+
+def test_reuse_coefficients_for_sizes_all_relevant():
+    """All loops relevant: fires decreases, size_factor grows, bds_needed resets to 1."""
+    sizes = [4, 8]
+    relevancies = [True, True]
+    fires, sf, tn, bn = reuse_coefficients_for_sizes(sizes, relevancies)
+
+    # stop=-1: fires=32, sf=1, tn=1, bn=1
+    assert fires[-1] == 32
+    assert sf[-1] == 1
+    assert tn[-1] == 1
+    assert bn[-1] == 1
+
+    # stop=0 (after first loop size=4, relevant=True):
+    # fires=32//4=8, sf=4, tn=4, bds_needed=1 (relevant resets)
+    assert fires[0] == 8
+    assert sf[0] == 4
+    assert tn[0] == 4
+    assert bn[0] == 1
+
+    # stop=1 (after second loop size=8, relevant=True):
+    # fires=8//8=1, sf=4*8=32, tn=32, bds_needed=1
+    assert fires[1] == 1
+    assert sf[1] == 32
+    assert tn[1] == 32
+    assert bn[1] == 1
+
+
+def test_reuse_coefficients_for_sizes_mixed_relevancies():
+    """Mixed: irrelevant loop accumulates bds_needed, resets on relevant."""
+    sizes = [4, 8, 2]
+    relevancies = [False, True, False]
+    fires, sf, tn, bn = reuse_coefficients_for_sizes(sizes, relevancies)
+
+    # stop=-1: fires=64, sf=1, tn=1, bn=1
+    assert fires[-1] == 64
+
+    # stop=0 (size=4, irrelevant): fires=16, sf=1, tn=1, bds=4
+    assert fires[0] == 16
+    assert sf[0] == 1
+    assert tn[0] == 1
+    assert bn[0] == 4
+
+    # stop=1 (size=8, relevant): fires=2, sf=8, tn=8, bds=1 (reset)
+    assert fires[1] == 2
+    assert sf[1] == 8
+    assert tn[1] == 8
+    assert bn[1] == 1
+
+    # stop=2 (size=2, irrelevant): fires=1, sf=8, tn=8, bds=2
+    assert fires[2] == 1
+    assert sf[2] == 8
+    assert tn[2] == 8
+    assert bn[2] == 2
+
+
+def test_reuse_coefficients_for_sizes_single_loop():
+    """Single loop: basic sanity check."""
+    fires, sf, tn, bn = reuse_coefficients_for_sizes([16], [True])
+    assert fires[-1] == 16
+    assert fires[0] == 1
+    assert sf[0] == 16
+    assert bn[0] == 1

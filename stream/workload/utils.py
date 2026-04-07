@@ -57,21 +57,46 @@ def get_equivalent_dimension(old_workload: "Workload", new_workload: "Workload",
 
 
 def generate_steady_state_iteration_spaces(
-    workload: "Workload", mapping: "Mapping", fusion_splits: dict[LayerDim, int]
+    workload: "Workload",
+    mapping: "Mapping",
+    fusion_splits: dict[LayerDim, int],
+    search_space=None,
 ) -> dict["HasIterationSpace", SteadyStateIterationSpace]:
+    """Generate steady-state iteration spaces for all nodes in the workload.
+
+    Per D-03: accepts an optional ``search_space`` parameter and passes it
+    to SSIS objects so that ``candidate_loop_sizes`` can be called on them.
+    """
     spatial_unrollings, unique_spatial_unrollings = collect_spatial_unrollings(workload, mapping)
     iteration_variables = _create_spatial_iteration_variables(workload, spatial_unrollings, unique_spatial_unrollings)
     iteration_variables = _add_temporal_iteration_variables(iteration_variables, fusion_splits, workload)
     iteration_variables = _insert_kernel_iteration_variables(iteration_variables, workload, unique_spatial_unrollings)
-    ssis_dict = _create_steady_state_iteration_spaces(iteration_variables, workload)
+    unique_spatial_unrollings_dict = dict(unique_spatial_unrollings)
+    ssis_dict = _create_steady_state_iteration_spaces(
+        iteration_variables, workload,
+        search_space=search_space,
+        spatial_unrollings_dict=unique_spatial_unrollings_dict,
+    )
     return ssis_dict
 
 
-def _create_steady_state_iteration_spaces(iteration_variables, workload: "Workload"):
-    """Create the steady state iteration spaces for each computation node."""
+def _create_steady_state_iteration_spaces(
+    iteration_variables,
+    workload: "Workload",
+    search_space=None,
+    spatial_unrollings_dict: dict | None = None,
+):
+    """Create the steady state iteration spaces for each computation node.
+
+    Per D-03: when search_space is provided, attach it and spatial_unrollings
+    to each SSIS object so that candidate_loop_sizes can be called on them.
+    """
     ssis_dict: dict[ComputationNode, SteadyStateIterationSpace] = {}
     for node in workload.get_iteration_space_nodes():
-        ssis_dict[node] = SteadyStateIterationSpace(iteration_variables[node])
+        ssis = SteadyStateIterationSpace(iteration_variables[node])
+        ssis.search_space = search_space
+        ssis.spatial_unrollings = spatial_unrollings_dict
+        ssis_dict[node] = ssis
         print(node.name, ssis_dict[node])
     return ssis_dict
 
