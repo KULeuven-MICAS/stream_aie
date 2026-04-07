@@ -15,7 +15,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [ ] **Phase 1: Baseline Validation** - New main entry point runs existing fixed-tile pipeline on BIG BOY config; regression test captures ground truth
 - [ ] **Phase 2: TileSizeLUT Infrastructure** - Pure-Python utility functions for tensor-size computation per candidate; candidate pre-filtering and SearchSpace infrastructure
 - [ ] **Phase 3: Tile Selection Variables + Memory Constraints** - Binary w[dim,k] variables introduced; memory capacity constraints linearized over tile selection
-- [ ] **Phase 4: Variable SSIS + FIFO Constraints** - SSIS loop sizes and object FIFO depth constraints propagate tile selection
+- [x] **Phase 4: Variable SSIS + FIFO Constraints** - SSIS loop sizes and object FIFO depth constraints propagate tile selection (completed 2026-04-07)
 - [ ] **Phase 5: Variable Transfer Latency** - Transfer latency constraints linearized over tile selection; all tile-dependent CO quantities complete
 - [ ] **Phase 6: Pipeline Integration + E2E Validation** - Variable mode wired through TilingGenerationStage; CLI entry point; BIG BOY end-to-end run
 
@@ -75,7 +75,7 @@ Plans:
 **Plans**: 2 plans
 Plans:
 - [x] 04-01-PLAN.md — SSIS utility functions, _ssis_coefficients_for_transfer helper, refactored _init_transfer_fire_helpers
-- [ ] 04-02-PLAN.md — Linearize fire rate, reuse factor, FIFO depth, and buffer descriptor constraints
+- [x] 04-02-PLAN.md — Linearize fire rate, reuse factor, FIFO depth, and buffer descriptor constraints
 
 ### Phase 5: Variable Transfer Latency
 **Goal**: Transfer latency in the CO model is a linear expression over tile selection variables; no tile-dependent quantity remains as a fixed scalar in the MILP
@@ -109,6 +109,6 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6
 | 1. Baseline Validation | 0/2 | Planning complete | - |
 | 2. TileSizeLUT Infrastructure | 0/2 | Planning complete | - |
 | 3. Tile Selection Variables + Memory Constraints | 2/3 | In Progress|  |
-| 4. Variable SSIS + FIFO Constraints | 1/2 | In Progress|  |
+| 4. Variable SSIS + FIFO Constraints | 2/2 | Complete   | 2026-04-07 |
 | 5. Variable Transfer Latency | 0/? | Not started | - |
 | 6. Pipeline Integration + E2E Validation | 0/? | Not started | - |
