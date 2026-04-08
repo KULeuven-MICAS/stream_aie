@@ -1669,6 +1669,23 @@ class TransferAndTensorAllocator:
             tensor_alloc[t] = chosen[0]
         return tensor_alloc
 
+    def get_selected_tiles(self) -> dict[LayerDim, int]:
+        """Return {dim: tile_size} for each dimension in the search space, post-solve.
+
+        Must be called after solve() completes successfully (Gurobi status OPTIMAL).
+        Returns an empty dict if no search space is set (scalar / fixed-tile mode).
+        """
+        if not self.w:
+            return {}
+        result: dict[LayerDim, int] = {}
+        for dim in self.search_space.dims():
+            options = self.search_space.get(dim)
+            for k, opt in enumerate(options):
+                if self.w[(dim, k)].X > self.VAR_THRESHOLD:
+                    result[dim] = opt.tile
+                    break
+        return result
+
     def get_object_fifo_depths_per_transfer(self) -> dict[TransferNode, int]:
         fifo_depths: dict[TransferNode, int] = {}
         for tr in self.transfer_nodes:

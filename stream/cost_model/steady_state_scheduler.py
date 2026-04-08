@@ -134,6 +134,8 @@ class SteadyStateScheduler:
             overlap,
             latency_per_iteration,
         ) = tta.solve()
+        # Store selected tile sizes from CO solve (for post-solve TilingGenerationStage)
+        self.selected_tiles = tta.get_selected_tiles()
         # total, per_iter, ov = tsa_upd.compute_latency(iterations=self.iterations, offchip_core_id=offchip_core_id)
         # assert total == total_latency_solver, (
         #     f"Calculated total latency {total} does not match total latency from solver {total_latency_solver}."
