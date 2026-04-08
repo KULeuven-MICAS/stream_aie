@@ -27,11 +27,12 @@ Requirements for variable tile size optimization milestone. Each maps to roadmap
 - [x] **CO-03**: Transfer sizes and latencies become linear expressions over tile selection variables
 - [x] **CO-04**: Object FIFO depth constraints use variable tile-dependent sizes
 - [x] **CO-05**: Big-M bounds are computed per-constraint using tight LUT-derived upper bounds (not the existing scalar big_m)
+- [ ] **CO-06**: Computation node latency in slot constraints becomes a linear expression over tile selection variables, using kernel size and Kernel utilization to compute per-candidate cycle counts
 
 ### Pipeline Integration
 
 - [ ] **PIPE-01**: End-to-end validation: variable tile CO on SwiGLU BIG BOY config selects valid tile sizes and produces a feasible allocation
-- [ ] **PIPE-02**: Variable tile mode integrated into TilingGenerationStage with toggle between fixed and variable modes
+- [ ] **PIPE-02**: TilingGenerationStage removed from the variable tile pipeline path — tile sizes are determined by the CO solver, not a preceding stage
 
 ## Future Requirements
 
@@ -71,12 +72,13 @@ Which phases cover which requirements. Updated during roadmap creation.
 | CO-02 | Phase 4 | Complete |
 | CO-04 | Phase 4 | Complete |
 | CO-03 | Phase 5 | Complete |
-| PIPE-01 | Phase 6 | Pending |
-| PIPE-02 | Phase 6 | Pending |
+| CO-06 | Phase 6 | Pending |
+| PIPE-01 | Phase 7 | Pending |
+| PIPE-02 | Phase 7 | Pending |
 
 **Coverage:**
-- v2.0 requirements: 14 total
-- Mapped to phases: 14
+- v2.0 requirements: 15 total
+- Mapped to phases: 15
 - Unmapped: 0
 
 ---

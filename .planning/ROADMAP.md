@@ -17,7 +17,8 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [ ] **Phase 3: Tile Selection Variables + Memory Constraints** - Binary w[dim,k] variables introduced; memory capacity constraints linearized over tile selection
 - [x] **Phase 4: Variable SSIS + FIFO Constraints** - SSIS loop sizes and object FIFO depth constraints propagate tile selection (completed 2026-04-07)
 - [x] **Phase 5: Variable Transfer Latency** - Transfer latency constraints linearized over tile selection; all tile-dependent CO quantities complete (completed 2026-04-08)
-- [ ] **Phase 6: Pipeline Integration + E2E Validation** - Variable mode wired through TilingGenerationStage; CLI entry point; BIG BOY end-to-end run
+- [ ] **Phase 6: Variable Compute Latency** - Computation node latency in slot constraints becomes tile-dependent using kernel size and Kernel utilization
+- [ ] **Phase 7: Pipeline Integration + E2E Validation** - TilingGenerationStage removed from variable path; CLI entry point; BIG BOY end-to-end run with multi-candidate tile selection
 
 ## Phase Details
 
@@ -89,22 +90,33 @@ Plans:
 Plans:
 - [x] 05-01-PLAN.md — Refactor _active_transfer_latency to pure MILP enumeration, remove NL helpers, add latency unit tests
 
-### Phase 6: Pipeline Integration + E2E Validation
-**Goal**: Variable tile mode is wired through TilingGenerationStage and a CLI entry point; the CO selects a valid tile size and produces a feasible allocation on SwiGLU BIG BOY with multiple tile candidates
+### Phase 6: Variable Compute Latency
+**Goal**: Computation node latency in the CO slot constraints becomes a tile-dependent linear expression, using the node's total kernel size (product of kernel loop dimensions) and the Kernel object's utilization to compute per-candidate cycle counts
 **Depends on**: Phase 5
+**Requirements**: CO-06
+**Success Criteria** (what must be TRUE):
+  1. `_slot_latency_constraints` uses a per-candidate compute latency expression instead of a fixed scalar from `cost_lut.get_cost(n, c).latency_total`
+  2. Per-candidate latency is derived from `ceil(kernel_size / (ops_per_cycle * utilization))` where kernel_size depends on tile selection
+  3. The model remains a pure MILP after compute latency changes
+  4. The regression test passes with a single-candidate degenerate input after compute latency changes
+**Plans**: TBD
+
+### Phase 7: Pipeline Integration + E2E Validation
+**Goal**: TilingGenerationStage is removed from the variable tile pipeline path (tile sizes are now CO-determined); a CLI entry point runs multi-candidate tile selection end-to-end on SwiGLU BIG BOY
+**Depends on**: Phase 6
 **Requirements**: PIPE-01, PIPE-02
 **Success Criteria** (what must be TRUE):
   1. Running main_swiglu_dse_v2.py --tile_size_options with BIG BOY config and multiple candidates completes without error and reports the selected tile size per dimension
   2. The selected tile sizes are valid divisors of their respective workload dimensions
   3. The CO objective on the multi-candidate run is at least as good as the fixed-tile baseline captured in Phase 1
-  4. TilingGenerationStage can be toggled between fixed and variable tile modes without modifying the CO directly
+  4. TilingGenerationStage is bypassed/removed when variable tile mode is active — tile sizes come solely from the CO solver
 **UI hint**: no
 **Plans**: TBD
 
 ## Progress
 
 **Execution Order:**
-Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6
+Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6 -> 7
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
@@ -113,4 +125,5 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6
 | 3. Tile Selection Variables + Memory Constraints | 2/3 | In Progress|  |
 | 4. Variable SSIS + FIFO Constraints | 2/2 | Complete   | 2026-04-07 |
 | 5. Variable Transfer Latency | 1/1 | Complete   | 2026-04-08 |
-| 6. Pipeline Integration + E2E Validation | 0/? | Not started | - |
+| 6. Variable Compute Latency | 0/? | Not started | - |
+| 7. Pipeline Integration + E2E Validation | 0/? | Not started | - |
