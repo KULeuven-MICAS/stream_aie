@@ -12,8 +12,7 @@ logger = logging.getLogger(__name__)
 class GeneticAlgorithmAllocationStage(Stage):
     """
     Class that finds the best inter-core mapping using a genetic algorithm.
-    From the IntraCoreMappingStage we receive the `CoreCostLUT`, containing for each node and its valid core
-      allocations the best CME.
+    From the CoreCostEstimationStage we receive a `TileAwareLatencyEstimator` for computing node latencies.
     We then initialize the genetic algorithm.
     TODO A separate "GeneticAlgorithmStage" should be added where we parse all GA-related info and this stage then calls
     TODO that stage.
@@ -22,7 +21,7 @@ class GeneticAlgorithmAllocationStage(Stage):
     REQUIRED_FIELDS = (
         "workload",
         "accelerator",
-        "cost_lut",
+        "latency_estimator",
         "nb_ga_generations",
         "nb_ga_individuals",
         "operands_to_prefetch",
@@ -40,14 +39,14 @@ class GeneticAlgorithmAllocationStage(Stage):
             list_of_callables (list): List of the substages to be called. This should be empty as this is a leaf stage.
             workload (DiGraph): The NetworkX DiGraph representing the workload to be scheduled
             accelerator (Accelerator): The hardware accelerator onto which we schedule the workload
-            cost_lut (CoreCostLUT): A LUT of cost entries for each unique node and their valid cores
+            latency_estimator: A TileAwareLatencyEstimator for computing node latencies
             nb_ga_generations: The number of generations considered by the genetic algorithm
             nb_ga_individuals: The number of individuals in each genetic algorithm generation
         """
         super().__init__(list_of_callables, ctx)
         self.workload = self.ctx.require_value("workload", self.__class__.__name__)
         self.accelerator = self.ctx.require_value("accelerator", self.__class__.__name__)
-        self.cost_lut = self.ctx.require_value("cost_lut", self.__class__.__name__)
+        self.latency_estimator = self.ctx.require_value("latency_estimator", self.__class__.__name__)
         self.nb_generations = self.ctx.require_value("nb_ga_generations", self.__class__.__name__)
         self.nb_individuals = self.ctx.require_value("nb_ga_individuals", self.__class__.__name__)
         self.operands_to_prefetch = self.ctx.require_value("operands_to_prefetch", self.__class__.__name__)
@@ -68,7 +67,7 @@ class GeneticAlgorithmAllocationStage(Stage):
             if not isinstance(n.chosen_core_allocation, int):
                 self.unique_nodes_flexible.append(n)
 
-        # For each unique node get the possible core allocations by getting the ids of the cores in cost_lut
+        # For each unique node get the possible core allocations from the mapping/workload
         self.valid_allocations: list[list[int]] = []
         # Save all the layer group combinations that are flexible
         self.layer_groups_flexible: list[tuple[int, int]] = []
@@ -77,8 +76,11 @@ class GeneticAlgorithmAllocationStage(Stage):
             # This assumes all the nodes of this layer are identical
             unique_node = next(n for n in self.unique_nodes if n.id == layer_id)
             if unique_node in self.unique_nodes_flexible:
-                cores = self.cost_lut.get_cores(unique_node)
-                valid_core_ids = [core.id for core in cores if core.id < len(self.unique_nodes_flexible)]
+                # Get valid core ids from possible_core_allocation instead of cost_lut
+                valid_core_ids = [
+                    cid for cid in (unique_node.possible_core_allocation or [])
+                    if cid < len(self.unique_nodes_flexible)
+                ]
                 self.layer_groups_flexible.append((layer_id, group_id))
                 self.valid_allocations.append(valid_core_ids)
 
@@ -86,7 +88,7 @@ class GeneticAlgorithmAllocationStage(Stage):
         self.fitness_evaluator = StandardFitnessEvaluator(
             self.workload,
             self.accelerator,
-            self.cost_lut,
+            self.latency_estimator,
             self.layer_groups_flexible,
             self.operands_to_prefetch,
             self.scheduling_order,

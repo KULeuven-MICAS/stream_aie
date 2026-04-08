@@ -1,20 +1,19 @@
 import logging
 from math import prod
 
-from zigzag.cost_model.cost_model import CostModelEvaluation
 from zigzag.datatypes import MemoryOperand
 from zigzag.mapping.data_movement import FourWayDataMoving
 
+from stream.cost_model.tile_aware_latency import TileAwareLatencyEstimator
 from stream.stages.context import StageContext
 from stream.stages.stage import Stage, StageCallable
-from stream.utils import get_too_large_operands, get_top_level_inst_bandwidth
 from stream.workload.computation.computation_node import ComputationNode
 
 logger = logging.getLogger(__name__)
 
 
 class SetFixedAllocationPerformanceStage(Stage):
-    REQUIRED_FIELDS = ("workload", "accelerator", "cost_lut")
+    REQUIRED_FIELDS = ("workload", "accelerator", "latency_estimator")
 
     def __init__(
         self,
@@ -24,7 +23,9 @@ class SetFixedAllocationPerformanceStage(Stage):
         super().__init__(list_of_callables, ctx)
         self.accelerator = self.ctx.require_value("accelerator", self.__class__.__name__)
         self.workload = self.ctx.require_value("workload", self.__class__.__name__)
-        self.cost_lut = self.ctx.require_value("cost_lut", self.__class__.__name__)
+        self.latency_estimator: TileAwareLatencyEstimator = self.ctx.require_value(
+            "latency_estimator", self.__class__.__name__
+        )
         self.latency_attr = self.ctx.get("latency_attr", "latency_total2")
         self.fix_all = self.ctx.get("fix_all", False)
 
@@ -37,7 +38,7 @@ class SetFixedAllocationPerformanceStage(Stage):
         self.set_fixed_allocation_performance()
         logger.info("Finished SetFixedAllocationPerformanceStage.")
 
-        self.ctx.set(workload=self.workload, accelerator=self.accelerator, cost_lut=self.cost_lut)
+        self.ctx.set(workload=self.workload, accelerator=self.accelerator)
         sub_stage = self.list_of_callables[0](self.list_of_callables[1:], self.ctx)
         yield from sub_stage.run()
 
@@ -48,41 +49,18 @@ class SetFixedAllocationPerformanceStage(Stage):
                 core_id = node.chosen_core_allocation
                 if core_id is None:
                     raise ValueError(f"Node {node} has fixed allocation but the chosen_core_allocation was not set.")
-                equal_node = self.cost_lut.get_equal_node(node)
-                assert equal_node is not None, f"{node} has fixed allocation but no equal node found."
                 core = self.accelerator.get_core(core_id)
-                cme = self.cost_lut.get_cost(equal_node, core)
-                latency = int(cme.ideal_cycle)
-                # Scale latency based on utilization of core
-                latency = int(latency * 100 / node.kernel.utilization)
-                too_large_operands = get_too_large_operands(cme, self.accelerator, core_id=core_id)
-                onchip_energy, offchip_energy = self.get_energy_distribution(cme, too_large_operands)
-
-                # Get the required offchip bandwidth during the execution of the node for all directions
-                bandwidth_scaling = cme.ideal_temporal_cycle / latency
-                offchip_bandwidth_per_op: dict[MemoryOperand, FourWayDataMoving] = {
-                    mem_op: get_top_level_inst_bandwidth(cme, mem_op, bandwidth_scaling)
-                    for mem_op in too_large_operands
-                }
+                inter_core_tiling = tuple(node.inter_core_tiling) if node.inter_core_tiling else ()
+                lat_est = self.latency_estimator.estimate(node, core, inter_core_tiling)
+                ideal_cycle = lat_est.ideal_cycle
+                latency = lat_est.latency_total
+                onchip_energy = lat_est.energy_total
+                offchip_energy = 0.0
+                too_large_operands: list[MemoryOperand] = []
+                offchip_bandwidth_per_op: dict[MemoryOperand, FourWayDataMoving] = {}
                 self.set_hw_performance_node(node, onchip_energy, offchip_energy, latency, core_id)
                 node.set_too_large_operands(too_large_operands.copy())
                 node.set_offchip_bandwidth(offchip_bandwidth_per_op)
-
-    def get_energy_distribution(
-        self, cme: CostModelEvaluation, too_large_operands: list[MemoryOperand]
-    ) -> tuple[float, float]:
-        onchip_energy = getattr(cme, "energy_total", 0)  # initialize the on-chip energy as total energy
-        # If there is a too_large_operand, we separate the off-chip energy.
-        offchip_energy = 0
-        mem_energy_breakdown = getattr(cme, "mem_energy_breakdown", {}) or {}
-        for too_large_operand in too_large_operands:
-            if not mem_energy_breakdown:
-                continue
-            layer_operand = cme.layer.memory_operand_links.mem_to_layer_op(too_large_operand)
-            layer_operand_offchip_energy = mem_energy_breakdown[layer_operand][-1]
-            offchip_energy += layer_operand_offchip_energy
-            onchip_energy -= layer_operand_offchip_energy
-        return onchip_energy, offchip_energy
 
     @staticmethod
     def set_hw_performance_node(

@@ -10,7 +10,7 @@ logger = logging.getLogger(__name__)
 
 
 class SetFixedAllocationStage(Stage):
-    REQUIRED_FIELDS = ("workload", "accelerator", "cost_lut")
+    REQUIRED_FIELDS = ("workload", "accelerator")
 
     def __init__(
         self,
@@ -20,7 +20,6 @@ class SetFixedAllocationStage(Stage):
         super().__init__(list_of_callables, ctx)
         self.accelerator = self.ctx.require_value("accelerator", self.__class__.__name__)
         self.workload = self.ctx.require_value("workload", self.__class__.__name__)
-        self.cost_lut = self.ctx.require_value("cost_lut", self.__class__.__name__)
 
     def run(self):
         logger.info("Start SetFixedAllocationStage.")
@@ -28,7 +27,7 @@ class SetFixedAllocationStage(Stage):
         self.set_fixed_allocation()
         logger.info("Finished SetFixedAllocationStage.")
 
-        self.ctx.set(workload=self.workload, accelerator=self.accelerator, cost_lut=self.cost_lut)
+        self.ctx.set(workload=self.workload, accelerator=self.accelerator)
         sub_stage = self.list_of_callables[0](self.list_of_callables[1:], self.ctx)
         yield from sub_stage.run()
 
@@ -38,9 +37,6 @@ class SetFixedAllocationStage(Stage):
             if len(node.core_allocation) == inter_core_tiling_size:
                 chosen_core_allocation = node.core_allocation[node.group]
                 node.set_chosen_core_allocation(chosen_core_allocation)
-                # Sanity check: cost_lut should contain an equal_core for all this chosen allocation
+                # Sanity check: core exists in accelerator
                 core = self.accelerator.get_core(chosen_core_allocation)
-                equal_node = self.cost_lut.get_equal_node(node)
-                assert equal_node
-                equal_core = self.cost_lut.get_equal_core(equal_node, core)
-                assert equal_core
+                assert core is not None, f"Core {chosen_core_allocation} not found in accelerator."

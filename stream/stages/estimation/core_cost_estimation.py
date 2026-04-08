@@ -1,26 +1,17 @@
 import logging
-import os
-from math import ceil
 from typing import Any
 
 from zigzag.cost_model.cost_model import CostModelEvaluation
 from zigzag.datatypes import Constants, MemoryOperand
 from zigzag.mapping.temporal_mapping import TemporalMappingType
 from zigzag.stages.stage import Stage as ZigZagStage
-from zigzag.utils import pickle_deepcopy
 
-from stream.cost_model.core_cost_lut import CoreCostLUT
 from stream.cost_model.tile_aware_latency import TileAwareLatencyEstimator
 from stream.hardware.architecture.accelerator import Accelerator
 from stream.hardware.architecture.core import Core
 from stream.mapping.mapping import Mapping
 from stream.stages.context import StageContext
-from stream.stages.estimation.aie_cost_estimator import AIECostEstimator
-from stream.stages.estimation.zigzag_cost_estimator import ZigZagCostEstimator
 from stream.stages.stage import Stage, StageCallable
-from stream.visualization.cost_model_evaluation_lut import (
-    visualize_cost_lut_pickle,
-)
 from stream.workload.workload import ComputationNode, Workload
 
 logger = logging.getLogger(__name__)
@@ -28,7 +19,12 @@ logger = logging.getLogger(__name__)
 
 class CoreCostEstimationStage(Stage):
     """
-    Stage that computes and caches core cost entries for each valid node-core allocation.
+    Stage that creates a TileAwareLatencyEstimator and sets it on the context.
+
+    This replaces the old CoreCostLUT-based approach (D-04, D-05): instead of running
+    ZigZag/AIE estimators and storing results in a LUT, we create a lightweight
+    TileAwareLatencyEstimator that computes latency on demand from node dimensions
+    and kernel utilization.
     """
 
     REQUIRED_FIELDS = (
@@ -46,21 +42,12 @@ class CoreCostEstimationStage(Stage):
         ctx: StageContext,
     ):
         """
-        Initialize the stage by:
-        - extracting all the unique nodes that will have to be evaluated
-        - initializing the valid node-core allocations (which are used later by the InterCoreMappingStage)
+        Initialize the stage.
         """
         super().__init__(list_of_callables, ctx)
         self.workload: Workload = self.ctx.get("workload")
         self.accelerator: Accelerator = self.ctx.get("accelerator")
         self.mapping: Mapping = self.ctx.get("mapping")
-        self.loma_lpf_limit = self.ctx.get("loma_lpf_limit")
-        self.output_path = self.ctx.get("output_path")
-        self.nb_spatial_mappings_generated: int = self.ctx.get("nb_spatial_mappings_generated", 1)
-        self.temporal_mapping_type: TemporalMappingType = self.ctx.get("temporal_mapping_type")
-        self.loma_show_progress_bar: bool = self.ctx.get("loma_show_progress_bar", False)
-        self.cost_lut_path: str = os.path.join(self.output_path, "core_cost_lut.pickle")
-        self.visualize_cost_lut_path: str = os.path.splitext(self.cost_lut_path)[0] + ".png"
 
         self.valid_allocations: dict[ComputationNode, list[Core]] = {}
         for node in self.workload.get_computation_nodes():
@@ -70,67 +57,21 @@ class CoreCostEstimationStage(Stage):
             assert len(node_mapping.resource_allocation) == 1, (
                 "TODO: Support multiple resource allocation entries per node"
             )
-            cores = node_mapping.resource_allocation[0]  # TODO: support multiple resource allocation entries
+            cores = node_mapping.resource_allocation[0]
             self.valid_allocations[node] = cores
-        self.cost_lut: CoreCostLUT = CoreCostLUT(self.cost_lut_path)
 
     def run(self):
         logger.info("Start CoreCostEstimationStage.")
-        self.update_cost_lut()
-        # self.visualize_cost_lut()
+        latency_estimator = TileAwareLatencyEstimator(self.workload, self.mapping)
         logger.info("Finished CoreCostEstimationStage.")
 
-        latency_estimator = TileAwareLatencyEstimator(self.workload, self.mapping)
         self.ctx.set(
             workload=self.workload,
             accelerator=self.accelerator,
-            cost_lut=self.cost_lut,
             latency_estimator=latency_estimator,
         )
         sub_stage = self.list_of_callables[0](self.list_of_callables[1:], self.ctx)
         yield from sub_stage.run()
-
-    def update_cost_lut(self):
-        for node in self.workload.get_computation_nodes():
-            seen_new = False
-            cores = self.valid_allocations[node]
-            for core in cores:
-                if self.cost_lut.has_cost(node, core):
-                    continue
-                equal_node = self.cost_lut.get_equal_node(node)
-                equal_core = self.cost_lut.get_equal_core(equal_node, core) if equal_node else None
-                if equal_node and equal_core:
-                    cost = pickle_deepcopy(self.cost_lut.get_cost(equal_node, equal_core))
-                    self.cost_lut.add_cost(node, core, cost, allow_overwrite=False)
-                    continue
-                estimator = self.get_estimator(core)
-                cost_entry = estimator.estimate(node, core)
-                self.cost_lut.add_cost(node, core, cost_entry, allow_overwrite=False)
-                seen_new = True
-            if seen_new:
-                self.cost_lut.save()
-
-    def get_estimator(self, core: Core):
-        if self.is_aie_compute_core(core):
-            return AIECostEstimator(self.workload, self.mapping)
-        return ZigZagCostEstimator(
-            workload=self.workload,
-            accelerator=self.accelerator,
-            mapping=self.mapping,
-            temporal_mapping_type=self.temporal_mapping_type,
-            loma_lpf_limit=self.loma_lpf_limit,
-            nb_spatial_mappings_generated=self.nb_spatial_mappings_generated,
-        )
-
-    def is_aie_compute_core(self, core: Core) -> bool:
-        return str(core.core_type).startswith("aie2.") and core.type == "compute"
-
-    def visualize_cost_lut(self):
-        scale_factors = {
-            n: len([cn for cn in self.workload.node_list if cn.has_same_performance(n)])
-            for n in self.cost_lut.get_nodes()
-        }
-        visualize_cost_lut_pickle(self.cost_lut, scale_factors, self.visualize_cost_lut_path)
 
 
 class MinimalBandwidthLatencyStage(ZigZagStage):
@@ -181,6 +122,7 @@ class MinimalBandwidthLatencyStage(ZigZagStage):
         """
         # TODO this does not cover all cases
         """
+        from math import ceil
         latency: int = int(cme.latency_total2)
 
         if not self.has_dram_level:

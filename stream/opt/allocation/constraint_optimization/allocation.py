@@ -23,7 +23,7 @@ import gurobipy as gp
 from gurobipy import GRB, Var
 from zigzag.datatypes import LayerOperand, MemoryOperand
 
-from stream.cost_model.core_cost_lut import CoreCostLUT
+from stream.cost_model.tile_aware_latency import TileAwareLatencyEstimator
 from stream.hardware.architecture.accelerator import Accelerator
 from stream.hardware.architecture.core import Core
 from stream.opt.allocation.constraint_optimization.config import ConstraintOptStageConfig
@@ -84,14 +84,14 @@ class ComputeAllocator:
         self,
         workload: Workload,
         accelerator: Accelerator,
-        cost_lut: CoreCostLUT,
+        latency_estimator: TileAwareLatencyEstimator | None,
         context: ConstraintContext,
         *,
         iterations: int = 1,
     ) -> None:
         self.workload = workload
         self.accelerator = accelerator
-        self.cost_lut = cost_lut
+        self.latency_estimator = latency_estimator
         self.context = context
         self.iterations = iterations
 
@@ -183,7 +183,7 @@ class ComputeAllocator:
             nodes,
             [c.id for c in cores],
             self.accelerator,
-            self.cost_lut,
+            self.latency_estimator,
             impossible_lat=0,
         )
         lat: LatDict = {(ids[n], c, k): v for (n, c, k), v in raw_lat.items()}
@@ -196,7 +196,7 @@ class ComputeAllocator:
         cores: list[Core],
         ids: dict,
     ) -> EnergyDict:
-        return get_energies(nodes, [c.id for c in cores], self.accelerator, self.cost_lut, 0, ids)
+        return get_energies(nodes, [c.id for c in cores], self.accelerator, self.latency_estimator, 0, ids)
 
     def _build_dependency_map(self, nodes, ids: dict) -> DepDict:
         out_op = LayerOperand("O")
@@ -463,7 +463,7 @@ class ComputeAllocator:
 def get_optimal_allocations(
     workload: Workload,
     accelerator: Accelerator,
-    cost_lut: CoreCostLUT,
+    latency_estimator: TileAwareLatencyEstimator | None = None,
     *,
     context: ConstraintContext | None = None,
     stage_config: ConstraintOptStageConfig | None = None,
@@ -481,7 +481,7 @@ def get_optimal_allocations(
     return ComputeAllocator(
         workload,
         accelerator,
-        cost_lut,
+        latency_estimator,
         context,
         iterations=iterations,
     ).get_optimal_allocations()

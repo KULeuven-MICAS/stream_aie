@@ -3,7 +3,7 @@ from typing import TYPE_CHECKING
 
 from zigzag.datatypes import LayerDim, UnrollFactor
 
-from stream.cost_model.core_cost_lut import CoreCostLUT
+from stream.cost_model.tile_aware_latency import TileAwareLatencyEstimator
 from stream.hardware.architecture.accelerator import Accelerator
 from stream.hardware.architecture.core import Core
 from stream.workload.steady_state.computation import SteadyStateComputation
@@ -43,7 +43,7 @@ def get_latencies(
     nodes: list[ComputationNode],
     core_ids: list[int],
     accelerator: Accelerator,
-    cost_lut: CoreCostLUT,
+    latency_estimator: TileAwareLatencyEstimator | None,
     impossible_lat: float = 1e11,
 ) -> tuple[dict[tuple[ComputationNode, Core, int], int], dict]:
     cores = [accelerator.get_core(core_id) for core_id in core_ids]
@@ -57,14 +57,17 @@ def get_latencies(
             if node.chosen_core_allocation is not None and core.id != node.chosen_core_allocation:
                 continue
             try:
-                equal_node = cost_lut.get_equal_node(node)
-                assert equal_node, f"No equal node for {node} found in CoreCostLUT"
-                cce = cost_lut.get_cost(equal_node, core)
+                if latency_estimator is None:
+                    lat = impossible_lat
+                    latencies[(node, core)] = lat
+                    continue
+                inter_core_tiling = tuple(node.inter_core_tiling) if node.inter_core_tiling else ()
+                lat_est = latency_estimator.estimate(node, core, inter_core_tiling)
                 inter_core_tiling_size = get_loop_size(node.inter_core_tiling)
                 inter_core_tiling_sizes[(node, core)] = inter_core_tiling_size
-                lat = cce.latency_total
+                lat = lat_est.latency_total
                 possible_allocations[node].append(core)
-            except ValueError:
+            except (ValueError, AssertionError):
                 lat = impossible_lat
             latencies[(node, core)] = lat
 
@@ -98,36 +101,26 @@ def get_energies(
     nodes: list[ComputationNode],
     core_ids: list[int],
     accelerator: Accelerator,
-    cost_lut: CoreCostLUT,
+    latency_estimator: TileAwareLatencyEstimator | None,
     impossible_energy: float = 1e11,
     ids: dict[ComputationNode, int] | None = None,
 ) -> dict[tuple[int, Core], float]:
     if ids is None:
         ids = {node: node.id for node in nodes}
     cores = [accelerator.get_core(core_id) for core_id in core_ids]
-    energies = {(ids[node], core): impossible_energy for node in nodes for core in cores}
-
-    for node in nodes:
-        for core in cores:
-            try:
-                eq_node = cost_lut.get_equal_node(node)
-                assert eq_node, f"No equal node for {node} found in CoreCostLUT"
-                cme = cost_lut.get_cost(eq_node, core)
-                en = cme.energy_total
-            except ValueError:
-                en = impossible_energy
-            energies[(ids[node], core)] = en
-
+    # Energy is not available from TileAwareLatencyEstimator (returns 0.0).
+    # Return 0 for all allocations so the CO optimizer treats energy as zero (AIE path).
+    energies = {(ids[node], core): 0.0 for node in nodes for core in cores}
     return energies
 
 
-def get_node_latencies(allocation: "TimeSlotAllocation", cost_lut, accelerator, latency_attr):
+def get_node_latencies(allocation: "TimeSlotAllocation", latency_estimator, accelerator, latency_attr):
     node_latencies = {}
     for node in allocation.get_computation_nodes():
         cores = allocation.get_resources_for_node(node)
         assert all(isinstance(core, Core) for core in cores), f"Node {node} has non-core resources: {cores}"
         core_ids = [core.id for core in cores if isinstance(core, Core)]
-        latencies, _ = get_latencies([node], core_ids, accelerator, cost_lut, latency_attr=latency_attr)
+        latencies, _ = get_latencies([node], core_ids, accelerator, latency_estimator)
         p = len(cores)
         for core in cores:
             assert isinstance(core, Core), f"Resource {core} for node {node} is not a Core."
@@ -198,7 +191,7 @@ def get_partitioned_nodes(
     node: ComputationNode,
     core_allocations: list[Core],
     accelerator: Accelerator,
-    cost_lut: CoreCostLUT,
+    latency_estimator: TileAwareLatencyEstimator | None,
     multiplicity: int,
 ) -> list[SteadyStateComputation]:
     """
@@ -215,7 +208,7 @@ def get_partitioned_nodes(
                 core.id,
             ],
             accelerator,
-            cost_lut,
+            latency_estimator,
         )
         runtime = latencies[(node, core, 1)]
         mapping_attr = node.extract_inter_core_mapping_attr()
@@ -268,7 +261,7 @@ def get_partitioned_nodes(
         ],
         [core.id for core in core_allocations],
         accelerator,
-        cost_lut,
+        latency_estimator,
     )
     runtimes = {core: latencies[(node, core, len(core_allocations))] for core in core_allocations}
     for i, core in enumerate(core_allocations):
