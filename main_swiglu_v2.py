@@ -97,6 +97,13 @@ def run_swiglu_v2(  # noqa: PLR0913
         npu=npu,
     )
 
+    # Report selected tile sizes (per D-05)
+    selected_tiles = ctx.get("selected_tiles")
+    if selected_tiles:
+        print("Selected tiles:")
+        for dim, tile in sorted(selected_tiles.items(), key=lambda x: str(x[0])):
+            print(f"  {dim}: {tile}")
+
     # Extract metrics from context
     scheduler = ctx.get("scheduler")
     latency_total = scheduler.latency_total
@@ -141,6 +148,7 @@ def run_swiglu_v2(  # noqa: PLR0913
         "overlap": overlap,
         "fire_counts": fire_counts,
         "z_stop": z_stop,
+        "selected_tiles": {str(dim): tile for dim, tile in selected_tiles.items()} if selected_tiles else {},
         "config": {
             "seq_len": seq_len,
             "embedding_dim": embedding_dim,
@@ -177,9 +185,27 @@ if __name__ == "__main__":
     parser.add_argument("--rows", type=int, default=4, help="Number of AIE rows to use (default: 4)")
     parser.add_argument("--cols", type=int, default=8, help="Number of AIE columns to use (default: 8)")
     parser.add_argument("--npu", type=str, default="npu2", help="NPU type to target (default: npu2)")
-    parser.add_argument("--seq_len_tile_size", type=int, default=16, help="Tile size for seq_len dimension (default: 16)")
-    parser.add_argument("--embedding_tile_size", type=int, default=128, help="Tile size for embedding dimension (default: 128)")
-    parser.add_argument("--hidden_tile_size", type=int, default=32, help="Tile size for hidden dimension (default: 32)")
+    parser.add_argument(
+        "--seq_len_tile_size",
+        type=int,
+        nargs="+",
+        default=[16],
+        help="Tile size(s) for seq_len dimension (default: [16]). Multiple values enable variable tile mode.",
+    )
+    parser.add_argument(
+        "--embedding_tile_size",
+        type=int,
+        nargs="+",
+        default=[128],
+        help="Tile size(s) for embedding dimension (default: [128]). Multiple values enable variable tile mode.",
+    )
+    parser.add_argument(
+        "--hidden_tile_size",
+        type=int,
+        nargs="+",
+        default=[32],
+        help="Tile size(s) for hidden dimension (default: [32]). Multiple values enable variable tile mode.",
+    )
     parser.add_argument(
         "--no_last_gemm_down",
         dest="last_gemm_down",
@@ -189,10 +215,10 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
 
-    # Convert scalar tile sizes to single-element lists for tile_options format
-    seq_len_tile_options = [args.seq_len_tile_size]
-    embedding_tile_options = [args.embedding_tile_size]
-    hidden_tile_options = [args.hidden_tile_size]
+    # With nargs='+', args.*_tile_size is already a list[int]
+    seq_len_tile_options = args.seq_len_tile_size       # already a list
+    embedding_tile_options = args.embedding_tile_size   # already a list
+    hidden_tile_options = args.hidden_tile_size         # already a list
 
     run_swiglu_v2(
         seq_len=args.seq_len,
