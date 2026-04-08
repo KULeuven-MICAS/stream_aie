@@ -81,12 +81,12 @@ def _make_allocator_stub(model: gp.Model, search_space: SearchSpace | None = Non
     stub._orig_mapping = MagicMock()
     stub._ssw_to_orig = {}  # identity mapping
     stub._orig_to_ssw = {}  # identity mapping
-    stub._ssw_dim_to_orig = TransferAndTensorAllocator._ssw_dim_to_orig.__get__(stub)
-    stub._orig_dim_to_ssw = TransferAndTensorAllocator._orig_dim_to_ssw.__get__(stub)
-    stub._resolve_orig_tensor = TransferAndTensorAllocator._resolve_orig_tensor.__get__(stub)
-    stub._orig_workload_dim_size = TransferAndTensorAllocator._orig_workload_dim_size.__get__(stub)
-    stub._translate_tiling_to_ssw = TransferAndTensorAllocator._translate_tiling_to_ssw.__get__(stub)
-    stub._translate_tiling_to_orig = TransferAndTensorAllocator._translate_tiling_to_orig.__get__(stub)
+    stub._ssw_dim_to_orig = lambda d: d  # identity: no SSW translation in test stubs
+    stub._orig_dim_to_ssw = lambda d: d
+    stub._resolve_orig_tensor = lambda tr, fallback: fallback  # always use SSW tensor in stubs
+    stub._orig_workload_dim_size = lambda d: stub._orig_workload.get_dimension_size(d)
+    stub._translate_tiling_to_ssw = lambda tiling: tiling  # identity in test stubs
+    stub._translate_tiling_to_orig = lambda tiling: tiling  # identity in test stubs
     stub._base_orig_dim_sizes = {}  # no iteration scaling in test stubs
     stub._iter_scale_by_jw = {}
     return stub
@@ -442,12 +442,12 @@ def _make_mem_constraint_stub(
     stub._orig_mapping = MagicMock()
     stub._ssw_to_orig = {}
     stub._orig_to_ssw = {}
-    stub._ssw_dim_to_orig = TransferAndTensorAllocator._ssw_dim_to_orig.__get__(stub)
-    stub._orig_dim_to_ssw = TransferAndTensorAllocator._orig_dim_to_ssw.__get__(stub)
-    stub._resolve_orig_tensor = TransferAndTensorAllocator._resolve_orig_tensor.__get__(stub)
-    stub._orig_workload_dim_size = TransferAndTensorAllocator._orig_workload_dim_size.__get__(stub)
-    stub._translate_tiling_to_ssw = TransferAndTensorAllocator._translate_tiling_to_ssw.__get__(stub)
-    stub._translate_tiling_to_orig = TransferAndTensorAllocator._translate_tiling_to_orig.__get__(stub)
+    stub._ssw_dim_to_orig = lambda d: d  # identity: no SSW translation in test stubs
+    stub._orig_dim_to_ssw = lambda d: d
+    stub._resolve_orig_tensor = lambda tr, fallback: fallback  # always use SSW tensor in stubs
+    stub._orig_workload_dim_size = lambda d: stub._orig_workload.get_dimension_size(d)
+    stub._translate_tiling_to_ssw = lambda tiling: tiling  # identity in test stubs
+    stub._translate_tiling_to_orig = lambda tiling: tiling  # identity in test stubs
     stub._base_orig_dim_sizes = {}
     stub._iter_scale_by_jw = {}
 
@@ -749,12 +749,12 @@ def _make_fire_helpers_stub(
     stub._orig_mapping = MagicMock()
     stub._ssw_to_orig = {}
     stub._orig_to_ssw = {}
-    stub._ssw_dim_to_orig = TransferAndTensorAllocator._ssw_dim_to_orig.__get__(stub)
-    stub._orig_dim_to_ssw = TransferAndTensorAllocator._orig_dim_to_ssw.__get__(stub)
-    stub._resolve_orig_tensor = TransferAndTensorAllocator._resolve_orig_tensor.__get__(stub)
-    stub._orig_workload_dim_size = TransferAndTensorAllocator._orig_workload_dim_size.__get__(stub)
-    stub._translate_tiling_to_ssw = TransferAndTensorAllocator._translate_tiling_to_ssw.__get__(stub)
-    stub._translate_tiling_to_orig = TransferAndTensorAllocator._translate_tiling_to_orig.__get__(stub)
+    stub._ssw_dim_to_orig = lambda d: d  # identity: no SSW translation in test stubs
+    stub._orig_dim_to_ssw = lambda d: d
+    stub._resolve_orig_tensor = lambda tr, fallback: fallback  # always use SSW tensor in stubs
+    stub._orig_workload_dim_size = lambda d: stub._orig_workload.get_dimension_size(d)
+    stub._translate_tiling_to_ssw = lambda tiling: tiling  # identity in test stubs
+    stub._translate_tiling_to_orig = lambda tiling: tiling  # identity in test stubs
     stub._base_orig_dim_sizes = {}
     stub._iter_scale_by_jw = {}
     # Pre-populate transfer_nodes_to_optimize_firings_for (normally done in __init__)
