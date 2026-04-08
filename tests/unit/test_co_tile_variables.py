@@ -1822,6 +1822,7 @@ def _make_slot_latency_stub(model: gp.Model, search_space, latency_estimate_per_
     stub._tensor_joint_candidates = {}
     stub.w = {}
     stub.tile_var = {}
+    stub.y_path_choice = {}  # no transfer nodes in this stub
 
     # Create a mock computation node
     mock_node = MagicMock()
