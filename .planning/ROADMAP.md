@@ -18,7 +18,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 4: Variable SSIS + FIFO Constraints** - SSIS loop sizes and object FIFO depth constraints propagate tile selection (completed 2026-04-07)
 - [x] **Phase 5: Variable Transfer Latency** - Transfer latency constraints linearized over tile selection; all tile-dependent CO quantities complete (completed 2026-04-08)
 - [x] **Phase 6: Variable Compute Latency** - Computation node latency in slot constraints becomes tile-dependent using kernel size and Kernel utilization (completed 2026-04-08)
-- [ ] **Phase 7: Pipeline Integration + E2E Validation** - TilingGenerationStage removed from variable path; CLI entry point; BIG BOY end-to-end run with multi-candidate tile selection
+- [x] **Phase 7: Pipeline Integration + E2E Validation** - TilingGenerationStage removed from variable path; CLI entry point; BIG BOY end-to-end run with multi-candidate tile selection (completed 2026-04-08)
 
 ## Phase Details
 
@@ -118,7 +118,7 @@ Plans:
 **Plans**: 2 plans
 Plans:
 - [x] 07-01-PLAN.md — Pipeline reorder, fusion_splits pre-computation, get_selected_tiles(), post-solve TilingGenerationStage
-- [ ] 07-02-PLAN.md — CLI nargs='+' multi-candidate args, E2E BIG BOY validation test
+- [x] 07-02-PLAN.md — CLI nargs='+' multi-candidate args, E2E BIG BOY validation test
 
 ## Progress
 
@@ -133,4 +133,4 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6 -> 7
 | 4. Variable SSIS + FIFO Constraints | 2/2 | Complete   | 2026-04-07 |
 | 5. Variable Transfer Latency | 1/1 | Complete   | 2026-04-08 |
 | 6. Variable Compute Latency | 3/3 | Complete   | 2026-04-08 |
-| 7. Pipeline Integration + E2E Validation | 0/2 | Planning complete | - |
+| 7. Pipeline Integration + E2E Validation | 2/2 | Complete   | 2026-04-08 |

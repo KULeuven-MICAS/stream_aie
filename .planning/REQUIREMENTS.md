@@ -31,7 +31,7 @@ Requirements for variable tile size optimization milestone. Each maps to roadmap
 
 ### Pipeline Integration
 
-- [ ] **PIPE-01**: End-to-end validation: variable tile CO on SwiGLU BIG BOY config selects valid tile sizes and produces a feasible allocation
+- [x] **PIPE-01**: End-to-end validation: variable tile CO on SwiGLU BIG BOY config selects valid tile sizes and produces a feasible allocation
 - [ ] **PIPE-02**: TilingGenerationStage removed from the variable tile pipeline path — tile sizes are determined by the CO solver, not a preceding stage
 
 ## Future Requirements
@@ -73,7 +73,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | CO-04 | Phase 4 | Complete |
 | CO-03 | Phase 5 | Complete |
 | CO-06 | Phase 6 | Complete |
-| PIPE-01 | Phase 7 | Pending |
+| PIPE-01 | Phase 7 | Complete |
 | PIPE-02 | Phase 7 | Pending |
 
 **Coverage:**
