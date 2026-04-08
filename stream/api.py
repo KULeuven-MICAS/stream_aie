@@ -26,11 +26,39 @@ from stream.stages.parsing.mapping_parser import MappingParserStage
 from stream.stages.parsing.onnx_model_parser import ONNXModelParserStage as StreamONNXModelParserStage
 
 # from stream.stages.set_fixed_allocation_performance import SetFixedAllocationPerformanceStage
-from stream.stages.stage import LeafStage, MainStage, StageCallable
+from stream.stages.stage import LeafStage, MainStage, Stage, StageCallable
 
 _logging_level = _logging.INFO
 _logging_format = "%(asctime)s - %(funcName)s +%(lineno)s - %(levelname)s - %(message)s"
 _logging.basicConfig(level=_logging_level, format=_logging_format)
+
+
+class _FusionSplitsStage(Stage):
+    """Compute fusion_splits from the untiled workload and mapping.
+
+    This lightweight stage replaces the side-effect of TilingGenerationStage that
+    previously ran before the CO.  It calls determine_fusion_splits() and sets the
+    result on ctx so ConstraintOptimizationAllocationStage can read it via
+    REQUIRED_FIELDS. Must run after MappingParserStage (needs workload + mapping).
+
+    Per D-03: pipeline order is MappingParser -> CandidateFilter ->
+    _FusionSplitsStage -> CoreCostEstimation -> CO -> TilingGeneration.
+    """
+
+    REQUIRED_FIELDS = ("workload", "mapping")
+
+    def __init__(self, list_of_callables, ctx):
+        super().__init__(list_of_callables, ctx)
+        self.workload = self.ctx.get("workload")
+        self.mapping = self.ctx.get("mapping")
+
+    def run(self):
+        from stream.workload.utils import determine_fusion_splits  # noqa: PLC0415
+
+        fusion_splits = determine_fusion_splits(self.workload, self.mapping)
+        self.ctx.set(fusion_splits=fusion_splits)
+        sub_stage = self.list_of_callables[0](self.list_of_callables[1:], self.ctx)
+        yield from sub_stage.run()
 
 
 def _sanity_check_inputs(hardware: str, workload: str, mapping: str, output_path: str):
@@ -167,13 +195,14 @@ def optimize_allocation_co(  # noqa: PLR0913
         logger.info(f"Loaded context from {ctx_path}")
     else:
         stages: list[StageCallable] = [  # Initializes the MainStage as entry point
-            AcceleratorParserStage,  # Parses the accelerator
-            StreamONNXModelParserStage,  # Parses the ONNX Model into the workload
-            MappingParserStage,
-            TilingGenerationStage,
-            CandidateFilterStage,  # Filters tile candidates, builds SearchSpace
-            CoreCostEstimationStage,
-            ConstraintOptimizationAllocationStage,
+            AcceleratorParserStage,         # Parses the accelerator
+            StreamONNXModelParserStage,     # Parses the ONNX Model into the workload
+            MappingParserStage,             # Sets: workload, mapping, tile_options_raw
+            CandidateFilterStage,           # Filters tile candidates, builds SearchSpace
+            _FusionSplitsStage,             # Pre-computes fusion_splits from untiled workload+mapping (per D-03)
+            CoreCostEstimationStage,        # Sets: latency_estimator (uses untiled workload)
+            ConstraintOptimizationAllocationStage,  # CO: w[dim,k] solved; sets: selected_tiles on ctx
+            TilingGenerationStage,          # Post-solve: applies selected_tiles to produce tiled workload (per D-01)
             MemoryAccessesEstimationStage,
         ]
         ctx = StageContext.from_kwargs(
