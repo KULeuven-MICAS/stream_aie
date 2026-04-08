@@ -69,7 +69,7 @@ class TransferAndTensorAllocator:
         ssis: dict[HasIterationSpace, SteadyStateIterationSpace],
         multiplicities: dict[ComputationNode, int],
         mapping: Mapping,
-        cost_lut: CoreCostLUT,
+        cost_lut: CoreCostLUT | None = None,
         *,
         big_m: int | None = None,
         gurobi_verbosity: int = 1,

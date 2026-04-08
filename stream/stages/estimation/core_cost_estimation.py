@@ -10,6 +10,7 @@ from zigzag.stages.stage import Stage as ZigZagStage
 from zigzag.utils import pickle_deepcopy
 
 from stream.cost_model.core_cost_lut import CoreCostLUT
+from stream.cost_model.tile_aware_latency import TileAwareLatencyEstimator
 from stream.hardware.architecture.accelerator import Accelerator
 from stream.hardware.architecture.core import Core
 from stream.mapping.mapping import Mapping
@@ -79,7 +80,13 @@ class CoreCostEstimationStage(Stage):
         # self.visualize_cost_lut()
         logger.info("Finished CoreCostEstimationStage.")
 
-        self.ctx.set(workload=self.workload, accelerator=self.accelerator, cost_lut=self.cost_lut)
+        latency_estimator = TileAwareLatencyEstimator(self.workload, self.mapping)
+        self.ctx.set(
+            workload=self.workload,
+            accelerator=self.accelerator,
+            cost_lut=self.cost_lut,
+            latency_estimator=latency_estimator,
+        )
         sub_stage = self.list_of_callables[0](self.list_of_callables[1:], self.ctx)
         yield from sub_stage.run()
 
