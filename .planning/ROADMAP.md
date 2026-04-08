@@ -85,7 +85,9 @@ Plans:
   1. _active_transfer_latency uses latency_var[tr] = quicksum(latency_lut[tr,k] * w[dim,k] for k) rather than a scalar computed from a fixed tensor size
   2. The model remains a pure MILP (no nonlinear or bilinear terms); addGenConstrNL is not used
   3. The regression test passes with a single-candidate degenerate input after latency changes
-**Plans**: TBD
+**Plans**: 1 plan
+Plans:
+- [ ] 05-01-PLAN.md — Refactor _active_transfer_latency to pure MILP enumeration, remove NL helpers, add latency unit tests
 
 ### Phase 6: Pipeline Integration + E2E Validation
 **Goal**: Variable tile mode is wired through TilingGenerationStage and a CLI entry point; the CO selects a valid tile size and produces a feasible allocation on SwiGLU BIG BOY with multiple tile candidates
@@ -110,5 +112,5 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6
 | 2. TileSizeLUT Infrastructure | 0/2 | Planning complete | - |
 | 3. Tile Selection Variables + Memory Constraints | 2/3 | In Progress|  |
 | 4. Variable SSIS + FIFO Constraints | 2/2 | Complete   | 2026-04-07 |
-| 5. Variable Transfer Latency | 0/? | Not started | - |
+| 5. Variable Transfer Latency | 0/1 | Planning complete | - |
 | 6. Pipeline Integration + E2E Validation | 0/? | Not started | - |
