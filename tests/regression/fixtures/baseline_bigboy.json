@@ -1,7 +1,7 @@
 {
-  "latency_total": 1030232586,
-  "latency_per_iteration": 14526,
-  "overlap": 6666,
+  "latency_total": 1030232714,
+  "latency_per_iteration": 14654,
+  "overlap": 6794,
   "fire_counts": {
     "Transfer(input)": 64,
     "Transfer(input_1)": 8192,
