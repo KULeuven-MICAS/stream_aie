@@ -59,7 +59,12 @@ class ConstraintOptimizationAllocationStage(Stage):
         logger.info("Start ConstraintOptimizationAllocationStage.")
         workload, scheduler = self.find_best_tensor_transfer_allocation()
         mapping = scheduler.mapping
-        self.ctx.set(workload=workload, mapping=mapping, scheduler=scheduler)
+        self.ctx.set(
+            workload=workload,
+            mapping=mapping,
+            scheduler=scheduler,
+            selected_tiles=scheduler.selected_tiles,
+        )
         logger.info("End ConstraintOptimizationAllocationStage.")
         sub_stage = self.list_of_callables[0](self.list_of_callables[1:], self.ctx)
         yield from sub_stage.run()
