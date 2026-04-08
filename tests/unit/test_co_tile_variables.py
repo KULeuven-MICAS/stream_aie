@@ -1505,3 +1505,288 @@ def test_degenerate_ssis_single_candidate_feasible(model):
     rf_var = stub.reuse_factors[tr]
     assert abs(fires_var.X - fires_k) < 1e-6, f"Expected fires={fires_k}, got {fires_var.X}"
     assert abs(rf_var.X - sf_k) < 1e-6, f"Expected reuse_factor={sf_k}, got {rf_var.X}"
+
+
+# ---------------------------------------------------------------------------
+# Phase 5 — Pure MILP transfer latency tests
+# ---------------------------------------------------------------------------
+
+
+def _make_latency_stub(model: gp.Model):
+    """Build a minimal stub for _active_transfer_latency testing."""
+    from stream.opt.allocation.constraint_optimization.transfer_and_tensor_allocation import (
+        TransferAndTensorAllocator,
+    )
+
+    stub = types.SimpleNamespace()
+    stub.model = model
+    stub._transfer_latency_cache = {}
+    stub.z_stop = {}
+    stub.reuse_levels = {}
+    stub.ssis = {}
+    stub.reuse_factors = {}
+    stub.y_path_choice = {}
+    stub._ssis_max_coefficients = {}
+    stub._tensor_max_size = {}
+    stub._tensor_joint_candidates = {}
+
+    stub._add_binary_product = TransferAndTensorAllocator._add_binary_product.__get__(stub)
+    stub._add_binary_scaled_continuous = TransferAndTensorAllocator._add_binary_scaled_continuous.__get__(stub)
+    stub._safe_name = TransferAndTensorAllocator._safe_name.__get__(stub)
+    stub._active_transfer_latency = TransferAndTensorAllocator._active_transfer_latency.__get__(stub)
+
+    return stub
+
+
+def test_active_transfer_latency_variable_mode(model):
+    """Variable tile mode with 2 candidates: latency var == amortized_latency for selected candidate.
+
+    Setup:
+    - 2 joint candidates: size_bits=[1024, 2048], min_bw=256
+    - latency_numerator = [ceil(1024/256)=4, ceil(2048/256)=8]
+    - sf_coeff = [1, 2], so amortized = [4/1=4.0, 8/2=4.0]
+    - Force jw0=1, z_stop=1, y=1
+    - Expected: latency_var.X == 4.0
+    """
+    from math import ceil
+
+    from stream.opt.allocation.constraint_optimization.transfer_and_tensor_allocation import (
+        TransferAndTensorAllocator,
+    )
+    from stream.workload.workload import Tensor
+
+    stub = _make_latency_stub(model)
+
+    tensor = MagicMock(spec=Tensor)
+    tensor.name = "lat_tensor_var"
+    tr = MagicMock()
+    tr.name = "tr_lat_var"
+    tr.inputs = [tensor]
+
+    # 2 joint candidates
+    jw0 = model.addVar(vtype=GRB.BINARY, name="jw_lat_0")
+    jw1 = model.addVar(vtype=GRB.BINARY, name="jw_lat_1")
+    # One-hot: jw0 + jw1 = 1, force jw0=1
+    model.addConstr(jw0 + jw1 == 1, name="jw_lat_onehot")
+    model.addConstr(jw0 == 1, name="jw_lat_force0")
+
+    # z_stop for stop level -1
+    z = model.addVar(vtype=GRB.BINARY, name="z_lat")
+    model.addConstr(z == 1, name="z_lat_fixed")
+
+    # path choice y
+    y = model.addVar(vtype=GRB.BINARY, name="y_lat")
+    model.addConstr(y == 1, name="y_lat_fixed")
+
+    model.update()
+
+    # Stub data
+    # reuse_levels[(tensor, -1)] = list of (fires_c, sf_c, jw) triples
+    stub.reuse_levels[(tensor, -1)] = [(1, 1, jw0), (1, 2, jw1)]
+    stub.z_stop[(tensor, -1)] = z
+
+    ssis_mock = MagicMock()
+    ssis_mock.get_applicable_temporal_variables.return_value = []  # only stop=-1
+    stub.ssis[tr] = ssis_mock
+
+    # Mock _joint_candidates_for_tensor to return [(1024, jw0), (2048, jw1)]
+    stub._joint_candidates_for_tensor = lambda t, _tr: [(1024, jw0), (2048, jw1)]
+
+    # Mock choice with min_bw=256
+    link = MagicMock()
+    link.bandwidth = 256
+    choice = MagicMock()
+    choice.links_used = [link]
+
+    # Expected latency: amortized[0] = ceil(1024/256)/1 = 4/1 = 4.0
+    expected_latency = ceil(1024 / 256) / 1  # 4.0
+
+    active_latency = stub._active_transfer_latency(tr, choice, y)
+
+    model.update()
+    model.setObjective(0)
+    model.optimize()
+
+    assert model.Status == GRB.OPTIMAL, f"Model infeasible, status={model.Status}"
+    assert abs(active_latency.X - expected_latency) < 1e-6, (
+        f"Expected latency={expected_latency}, got {active_latency.X}"
+    )
+
+
+def test_active_transfer_latency_degenerate(model):
+    """Degenerate case: 1 candidate, latency == ceil(size_bits/min_bw)/sf_coeff.
+
+    Setup:
+    - 1 joint candidate: size_bits=512, min_bw=128
+    - latency_numerator = ceil(512/128) = 4
+    - sf_coeff = 1, so amortized = 4.0
+    - Force jw=1, z_stop=1, y=1
+    - Expected: latency_var.X == 4.0
+    """
+    from math import ceil
+
+    from stream.workload.workload import Tensor
+
+    stub = _make_latency_stub(model)
+
+    tensor = MagicMock(spec=Tensor)
+    tensor.name = "lat_tensor_deg"
+    tr = MagicMock()
+    tr.name = "tr_lat_deg"
+    tr.inputs = [tensor]
+
+    jw = model.addVar(vtype=GRB.BINARY, name="jw_lat_deg")
+    model.addConstr(jw == 1, name="jw_lat_deg_fixed")
+
+    z = model.addVar(vtype=GRB.BINARY, name="z_lat_deg")
+    model.addConstr(z == 1, name="z_lat_deg_fixed")
+
+    y = model.addVar(vtype=GRB.BINARY, name="y_lat_deg")
+    model.addConstr(y == 1, name="y_lat_deg_fixed")
+
+    model.update()
+
+    stub.reuse_levels[(tensor, -1)] = [(1, 1, jw)]
+    stub.z_stop[(tensor, -1)] = z
+
+    ssis_mock = MagicMock()
+    ssis_mock.get_applicable_temporal_variables.return_value = []
+    stub.ssis[tr] = ssis_mock
+
+    stub._joint_candidates_for_tensor = lambda t, _tr: [(512, jw)]
+
+    link = MagicMock()
+    link.bandwidth = 128
+    choice = MagicMock()
+    choice.links_used = [link]
+
+    expected_latency = ceil(512 / 128) / 1  # 4.0
+
+    active_latency = stub._active_transfer_latency(tr, choice, y)
+
+    model.update()
+    model.setObjective(0)
+    model.optimize()
+
+    assert model.Status == GRB.OPTIMAL, f"Model infeasible, status={model.Status}"
+    assert abs(active_latency.X - expected_latency) < 1e-6, (
+        f"Expected latency={expected_latency}, got {active_latency.X}"
+    )
+
+
+def test_active_transfer_latency_scalar_fallback(model):
+    """Scalar fallback: no tiled dims, latency is computed correctly without addGenConstrNL.
+
+    Setup:
+    - _joint_candidates_for_tensor returns [] (no tiled dims)
+    - reuse_levels[(tensor, -1)] = (1, 1) plain tuple (scalar mode)
+    - _transfer_latency_for_path returns 4
+    - Force y=1
+    - Expected: latency_var.X == 4.0, model.NumGenConstrs == 0
+    """
+    from stream.workload.workload import Tensor
+
+    stub = _make_latency_stub(model)
+
+    tensor = MagicMock(spec=Tensor)
+    tensor.name = "lat_tensor_scalar"
+    tr = MagicMock()
+    tr.name = "tr_lat_scalar"
+    tr.inputs = [tensor]
+
+    z = model.addVar(vtype=GRB.BINARY, name="z_lat_scalar")
+    model.addConstr(z == 1, name="z_lat_scalar_fixed")
+
+    y = model.addVar(vtype=GRB.BINARY, name="y_lat_scalar")
+    model.addConstr(y == 1, name="y_lat_scalar_fixed")
+
+    reuse_factor_var = model.addVar(vtype=GRB.INTEGER, lb=1, ub=1, name="rf_scalar")
+    model.addConstr(reuse_factor_var == 1, name="rf_scalar_fixed")
+
+    model.update()
+
+    # Scalar mode: plain (fires, sf) tuple
+    stub.reuse_levels[(tensor, -1)] = (1, 1)
+    stub.z_stop[(tensor, -1)] = z
+    stub.reuse_factors[tr] = reuse_factor_var
+
+    ssis_mock = MagicMock()
+    ssis_mock.get_applicable_temporal_variables.return_value = []
+    stub.ssis[tr] = ssis_mock
+
+    # No tiled dims => empty candidates list
+    stub._joint_candidates_for_tensor = lambda t, _tr: []
+
+    # Mock _transfer_latency_for_path to return 4
+    stub._transfer_latency_for_path = staticmethod(lambda _tr, _choice: 4)
+
+    link = MagicMock()
+    link.bandwidth = 256
+    choice = MagicMock()
+    choice.links_used = [link]
+
+    active_latency = stub._active_transfer_latency(tr, choice, y)
+
+    model.update()
+    model.setObjective(0)
+    model.optimize()
+
+    assert model.Status == GRB.OPTIMAL, f"Model infeasible, status={model.Status}"
+    assert abs(active_latency.X - 4.0) < 1e-6, (
+        f"Expected latency=4.0, got {active_latency.X}"
+    )
+    assert model.NumGenConstrs == 0, (
+        f"Expected 0 general constraints (NL), got {model.NumGenConstrs}"
+    )
+
+
+def test_no_genconstr_nl_in_model(model):
+    """Variable mode: after calling _active_transfer_latency, model.NumGenConstrs == 0.
+
+    Same setup as test_active_transfer_latency_variable_mode. Verifies the model
+    is a pure MILP — no addGenConstrNL calls remain.
+    """
+    from stream.workload.workload import Tensor
+
+    stub = _make_latency_stub(model)
+
+    tensor = MagicMock(spec=Tensor)
+    tensor.name = "lat_tensor_nl"
+    tr = MagicMock()
+    tr.name = "tr_lat_nl"
+    tr.inputs = [tensor]
+
+    jw0 = model.addVar(vtype=GRB.BINARY, name="jw_nl_0")
+    jw1 = model.addVar(vtype=GRB.BINARY, name="jw_nl_1")
+    model.addConstr(jw0 + jw1 == 1, name="jw_nl_onehot")
+    model.addConstr(jw0 == 1, name="jw_nl_force0")
+
+    z = model.addVar(vtype=GRB.BINARY, name="z_nl")
+    model.addConstr(z == 1, name="z_nl_fixed")
+
+    y = model.addVar(vtype=GRB.BINARY, name="y_nl")
+    model.addConstr(y == 1, name="y_nl_fixed")
+
+    model.update()
+
+    stub.reuse_levels[(tensor, -1)] = [(1, 1, jw0), (1, 2, jw1)]
+    stub.z_stop[(tensor, -1)] = z
+
+    ssis_mock = MagicMock()
+    ssis_mock.get_applicable_temporal_variables.return_value = []
+    stub.ssis[tr] = ssis_mock
+
+    stub._joint_candidates_for_tensor = lambda t, _tr: [(1024, jw0), (2048, jw1)]
+
+    link = MagicMock()
+    link.bandwidth = 256
+    choice = MagicMock()
+    choice.links_used = [link]
+
+    stub._active_transfer_latency(tr, choice, y)
+
+    model.update()
+
+    assert model.NumGenConstrs == 0, (
+        f"Expected 0 general constraints (NL), got {model.NumGenConstrs}"
+    )
