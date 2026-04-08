@@ -1662,56 +1662,6 @@ class TransferAndTensorAllocator:
         # Optional: sanitize if your objects print with spaces or odd chars
         return str(name).replace(" ", "_").replace(":", "_")
 
-    def _add_const_over_linexpr(
-        self,
-        *,
-        numerator: float,
-        denominator_expr: gp.LinExpr,
-        base_name: str,
-        denominator_lb: float,
-        result_lb: float = 0.0,
-        denominator_ub: float | None = None,
-        result_ub: float | None = None,
-    ) -> tuple[gp.Var, gp.Var]:
-        """
-        Create:
-            den = denominator_expr
-            res = numerator / den
-
-        Returns:
-            (res, den)
-
-        Notes:
-        - denominator_lb must be strictly positive.
-        - If you know denominator_ub or result_ub, pass them for tighter models.
-        """
-        assert denominator_lb > 0.0, "denominator_lb must be strictly positive"
-
-        n = self._safe_name(base_name)
-
-        den = self.model.addVar(
-            lb=denominator_lb,
-            ub=denominator_ub if denominator_ub is not None else GRB.INFINITY,
-            name=f"{n}__den",
-        )
-        res = self.model.addVar(
-            lb=result_lb,
-            ub=result_ub if result_ub is not None else GRB.INFINITY,
-            name=f"{n}__val",
-        )
-
-        self.model.addConstr(
-            den == denominator_expr,
-            name=f"{n}__def_den",
-        )
-        self.model.addGenConstrNL(
-            res,
-            float(numerator) / den,
-            name=f"{n}__def_div",
-        )
-
-        return res, den
-
     def _add_binary_scaled_continuous(
         self,
         *,
@@ -1752,37 +1702,6 @@ class TransferAndTensorAllocator:
         self.model.addConstr(z >= 0.0, name=f"{n}__prod_lb2")
 
         return z
-
-    def _add_binary_times_const_over_linexpr(
-        self,
-        *,
-        binary_var: gp.Var,
-        numerator: float,
-        denominator_expr: gp.LinExpr,
-        denominator_lb: float,
-        base_name: str,
-        denominator_ub: float | None = None,
-    ) -> gp.Var:
-        assert denominator_lb > 0.0
-
-        result_ub = float(numerator) / denominator_lb
-
-        ratio_var, _ = self._add_const_over_linexpr(
-            numerator=numerator,
-            denominator_expr=denominator_expr,
-            base_name=base_name,
-            denominator_lb=denominator_lb,
-            denominator_ub=denominator_ub,
-            result_lb=0.0,
-            result_ub=result_ub,
-        )
-
-        return self._add_binary_scaled_continuous(
-            binary_var=binary_var,
-            continuous_var=ratio_var,
-            continuous_ub=result_ub,
-            base_name=f"{base_name}__gated",
-        )
 
     def _add_binary_product(
         self,
@@ -1927,19 +1846,144 @@ class TransferAndTensorAllocator:
         y: gp.Var,
     ) -> gp.Var:
         if (tr, choice) in self._transfer_latency_cache:
-            active_latency = self._transfer_latency_cache[(tr, choice)]
-        else:
-            latency_constant = float(self._transfer_latency_for_path(tr, choice))
-            reuse_factor: gp.LinExpr = self.reuse_factors[tr]
-            active_latency = self._add_binary_times_const_over_linexpr(
-                binary_var=y,
-                numerator=latency_constant,
-                denominator_expr=reuse_factor,
-                denominator_lb=1.0,
-                base_name=f"transfer_latency_{tr}",
-            )
-            self._transfer_latency_cache[(tr, choice)] = active_latency
+            return self._transfer_latency_cache[(tr, choice)]
 
+        t = tr.inputs[0]
+        min_bw = min(link.bandwidth for link in choice.links_used)
+
+        # Detect variable vs scalar mode (per D-01, D-04)
+        rl_check = self.reuse_levels.get((t, -1))
+        joint_candidates = self._joint_candidates_for_tensor(t, tr)
+
+        if isinstance(rl_check, list) and joint_candidates:
+            # --- Variable tile mode (per D-04, D-05) ---
+            # Enumerate (tile_candidate k, stop_level s) pairs.
+            # For each pair: amortized_latency[k,s] = ceil(size_bits[k] / min_bw) / sf_coeff[k,s]
+            # All scalars — the active pair is selected by joint_w[k] AND z_stop[s].
+
+            applicable_vars = self.ssis[tr].get_applicable_temporal_variables()
+            stop_levels = list(range(-1, len(applicable_vars)))
+
+            # Build a size_bits lookup keyed by joint_w identity for co-indexing
+            # (handles potential dim-set mismatch between tensor-tiled and SSIS-tiled dims)
+            size_by_jw = {id(jw): sb for sb, jw in joint_candidates}
+
+            lc_parts = []  # One lc auxiliary per stop level
+            M_total = 0.0
+
+            for s in stop_levels:
+                z = self.z_stop[(t, s)]
+                rl_s = self.reuse_levels[(t, s)]  # list of (fires_c, sf_c, jw)
+
+                # Compute amortized latency coefficients for this stop level
+                amortized_coeffs = []  # list of (amortized_value, jw)
+                for fires_c, sf_c, jw in rl_s:
+                    sb = size_by_jw.get(id(jw))
+                    if sb is not None:
+                        # Candidate appears in both tensor-tiled and SSIS-tiled enumerations
+                        lat_num = ceil(sb / min_bw)
+                        amort = lat_num / sf_c  # float division per D-04
+                    else:
+                        # SSIS candidate not in tensor candidates — use max tensor size as conservative fallback
+                        lat_num = ceil(self._tensor_max_size.get(t, 0) / min_bw)
+                        amort = lat_num / sf_c
+                    amortized_coeffs.append((amort, jw))
+
+                if not amortized_coeffs:
+                    continue
+
+                M_s = max(a for a, _ in amortized_coeffs)
+                if M_s <= 0:
+                    continue
+
+                # expr_s = sum(amortized[k,s] * joint_w[k] for k)
+                expr_s = quicksum(a * jw for a, jw in amortized_coeffs)
+
+                # Big-M linearization: lc_s = z_stop[s] * expr_s
+                lc = self.model.addVar(
+                    vtype=GRB.CONTINUOUS, lb=0, ub=M_s,
+                    name=f"lat_lc_{self._safe_name(str(tr.name))}_L{s}",
+                )
+                self.model.addConstr(lc <= expr_s, name=f"lat_lc_ub_expr_{self._safe_name(str(tr.name))}_L{s}")
+                self.model.addConstr(lc <= M_s * z, name=f"lat_lc_ub_m_{self._safe_name(str(tr.name))}_L{s}")
+                self.model.addConstr(lc >= expr_s - M_s * (1 - z), name=f"lat_lc_lb_{self._safe_name(str(tr.name))}_L{s}")
+                lc_parts.append(lc)
+                M_total += M_s
+
+            # lat_sum = sum of all stop-level contributions
+            if lc_parts:
+                lat_sum = self.model.addVar(
+                    vtype=GRB.CONTINUOUS, lb=0, ub=M_total,
+                    name=f"lat_sum_{self._safe_name(str(tr.name))}",
+                )
+                self.model.addConstr(lat_sum == quicksum(lc_parts), name=f"lat_sum_def_{self._safe_name(str(tr.name))}")
+            else:
+                lat_sum = self.model.addVar(vtype=GRB.CONTINUOUS, lb=0, ub=0, name=f"lat_sum_{self._safe_name(str(tr.name))}")
+
+            # Gate by path choice y: active_latency = y * lat_sum
+            active_latency = self._add_binary_scaled_continuous(
+                binary_var=y,
+                continuous_var=lat_sum,
+                continuous_ub=M_total if M_total > 0 else 1.0,
+                base_name=f"transfer_latency_{self._safe_name(str(tr.name))}",
+            )
+
+        else:
+            # --- Scalar fallback (per D-09) ---
+            # No tiled dims: compute scalar latency and amortize by reuse_factor directly.
+            # Pure MILP: pre-compute amortized_latency[s] = ceil(size_bits / min_bw) / sf_coeff[s]
+            # and select via z_stop, same structure as variable mode but with one "candidate".
+            latency_constant = float(self._transfer_latency_for_path(tr, choice))
+
+            applicable_vars = self.ssis[tr].get_applicable_temporal_variables()
+            stop_levels = list(range(-1, len(applicable_vars)))
+
+            lc_parts = []
+            M_total = 0.0
+
+            for s in stop_levels:
+                z = self.z_stop[(t, s)]
+                rl_s = self.reuse_levels[(t, s)]
+
+                if isinstance(rl_s, tuple):
+                    # Scalar mode: (fires, sf)
+                    sf_c = rl_s[1]
+                elif isinstance(rl_s, list):
+                    # Should not reach here (guarded above), but handle gracefully
+                    sf_c = rl_s[0][1] if rl_s else 1
+                else:
+                    sf_c = 1
+
+                amort = latency_constant / sf_c if sf_c > 0 else latency_constant
+                M_s = amort
+
+                lc = self.model.addVar(
+                    vtype=GRB.CONTINUOUS, lb=0, ub=M_s,
+                    name=f"lat_lc_{self._safe_name(str(tr.name))}_L{s}",
+                )
+                self.model.addConstr(lc <= amort * z, name=f"lat_lc_ub_m_{self._safe_name(str(tr.name))}_L{s}")
+                self.model.addConstr(lc >= amort * z, name=f"lat_lc_lb_{self._safe_name(str(tr.name))}_L{s}")
+                # Simplified: lc = amort * z (since amort is a scalar, lc is just scaled z_stop)
+                lc_parts.append(lc)
+                M_total += M_s
+
+            if lc_parts:
+                lat_sum = self.model.addVar(
+                    vtype=GRB.CONTINUOUS, lb=0, ub=M_total,
+                    name=f"lat_sum_{self._safe_name(str(tr.name))}",
+                )
+                self.model.addConstr(lat_sum == quicksum(lc_parts), name=f"lat_sum_def_{self._safe_name(str(tr.name))}")
+            else:
+                lat_sum = self.model.addVar(vtype=GRB.CONTINUOUS, lb=0, ub=0, name=f"lat_sum_{self._safe_name(str(tr.name))}")
+
+            active_latency = self._add_binary_scaled_continuous(
+                binary_var=y,
+                continuous_var=lat_sum,
+                continuous_ub=M_total if M_total > 0 else 1.0,
+                base_name=f"transfer_latency_{self._safe_name(str(tr.name))}",
+            )
+
+        self._transfer_latency_cache[(tr, choice)] = active_latency
         return active_latency
 
     def _mip_progress_callback(self, model, where):
