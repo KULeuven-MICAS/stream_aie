@@ -73,6 +73,22 @@ def _make_allocator_stub(model: gp.Model, search_space: SearchSpace | None = Non
     stub._safe_name = (
         TransferAndTensorAllocator._safe_name.__get__(stub)
     )
+    # Phase 7: methods now access _orig_workload/_orig_mapping for stable dim resolution.
+    # In test stubs, orig == current (no SSW translation needed).
+    stub._orig_workload = MagicMock()
+    stub._orig_workload.get_node_by_name.side_effect = KeyError("stub")  # force fallback to SSW workload
+    stub._orig_workload.get_iteration_space_nodes.return_value = []
+    stub._orig_mapping = MagicMock()
+    stub._ssw_to_orig = {}  # identity mapping
+    stub._orig_to_ssw = {}  # identity mapping
+    stub._ssw_dim_to_orig = TransferAndTensorAllocator._ssw_dim_to_orig.__get__(stub)
+    stub._orig_dim_to_ssw = TransferAndTensorAllocator._orig_dim_to_ssw.__get__(stub)
+    stub._resolve_orig_tensor = TransferAndTensorAllocator._resolve_orig_tensor.__get__(stub)
+    stub._orig_workload_dim_size = TransferAndTensorAllocator._orig_workload_dim_size.__get__(stub)
+    stub._translate_tiling_to_ssw = TransferAndTensorAllocator._translate_tiling_to_ssw.__get__(stub)
+    stub._translate_tiling_to_orig = TransferAndTensorAllocator._translate_tiling_to_orig.__get__(stub)
+    stub._base_orig_dim_sizes = {}  # no iteration scaling in test stubs
+    stub._iter_scale_by_jw = {}
     return stub
 
 
@@ -419,6 +435,22 @@ def _make_mem_constraint_stub(
     stub._tiled_dims_for_tensor = TransferAndTensorAllocator._tiled_dims_for_tensor.__get__(stub)
     stub._joint_binary_for_combo = TransferAndTensorAllocator._joint_binary_for_combo.__get__(stub)
 
+    # Phase 7 attributes for _orig_workload resolution
+    stub._orig_workload = MagicMock()
+    stub._orig_workload.get_node_by_name.side_effect = KeyError("stub")
+    stub._orig_workload.get_iteration_space_nodes.return_value = []
+    stub._orig_mapping = MagicMock()
+    stub._ssw_to_orig = {}
+    stub._orig_to_ssw = {}
+    stub._ssw_dim_to_orig = TransferAndTensorAllocator._ssw_dim_to_orig.__get__(stub)
+    stub._orig_dim_to_ssw = TransferAndTensorAllocator._orig_dim_to_ssw.__get__(stub)
+    stub._resolve_orig_tensor = TransferAndTensorAllocator._resolve_orig_tensor.__get__(stub)
+    stub._orig_workload_dim_size = TransferAndTensorAllocator._orig_workload_dim_size.__get__(stub)
+    stub._translate_tiling_to_ssw = TransferAndTensorAllocator._translate_tiling_to_ssw.__get__(stub)
+    stub._translate_tiling_to_orig = TransferAndTensorAllocator._translate_tiling_to_orig.__get__(stub)
+    stub._base_orig_dim_sizes = {}
+    stub._iter_scale_by_jw = {}
+
     # Build a Core mock using spec=Core so isinstance(core, Core) passes
     from stream.hardware.architecture.core import Core
     core = MagicMock(spec=Core)
@@ -710,6 +742,21 @@ def _make_fire_helpers_stub(
     stub._classify_transfer_nodes_for_firing_optimization = (
         TransferAndTensorAllocator._classify_transfer_nodes_for_firing_optimization.__get__(stub)
     )
+    # Phase 7: methods access _orig_workload/_orig_mapping for stable dim resolution.
+    stub._orig_workload = MagicMock()
+    stub._orig_workload.get_node_by_name.side_effect = KeyError("stub")
+    stub._orig_workload.get_iteration_space_nodes.return_value = []
+    stub._orig_mapping = MagicMock()
+    stub._ssw_to_orig = {}
+    stub._orig_to_ssw = {}
+    stub._ssw_dim_to_orig = TransferAndTensorAllocator._ssw_dim_to_orig.__get__(stub)
+    stub._orig_dim_to_ssw = TransferAndTensorAllocator._orig_dim_to_ssw.__get__(stub)
+    stub._resolve_orig_tensor = TransferAndTensorAllocator._resolve_orig_tensor.__get__(stub)
+    stub._orig_workload_dim_size = TransferAndTensorAllocator._orig_workload_dim_size.__get__(stub)
+    stub._translate_tiling_to_ssw = TransferAndTensorAllocator._translate_tiling_to_ssw.__get__(stub)
+    stub._translate_tiling_to_orig = TransferAndTensorAllocator._translate_tiling_to_orig.__get__(stub)
+    stub._base_orig_dim_sizes = {}
+    stub._iter_scale_by_jw = {}
     # Pre-populate transfer_nodes_to_optimize_firings_for (normally done in __init__)
     stub._classify_transfer_nodes_for_firing_optimization()
     return stub, trs
@@ -1534,6 +1581,7 @@ def _make_latency_stub(model: gp.Model):
     stub._add_binary_scaled_continuous = TransferAndTensorAllocator._add_binary_scaled_continuous.__get__(stub)
     stub._safe_name = TransferAndTensorAllocator._safe_name.__get__(stub)
     stub._active_transfer_latency = TransferAndTensorAllocator._active_transfer_latency.__get__(stub)
+    stub._iter_scale_by_jw = {}  # Phase 7: iteration scaling for transfer latency
 
     return stub
 
@@ -1880,6 +1928,20 @@ def _make_slot_latency_stub(model: gp.Model, search_space, latency_estimate_per_
     stub._joint_binary_for_combo = TransferAndTensorAllocator._joint_binary_for_combo.__get__(stub)
     stub._add_binary_scaled_continuous = TransferAndTensorAllocator._add_binary_scaled_continuous.__get__(stub)
 
+    # Phase 7: _slot_latency_constraints now accesses _orig_workload/_orig_mapping
+    # for stable dimension resolution. In tests, orig == current (no SSW translation).
+    stub._orig_workload = workload
+    stub._orig_mapping = mapping
+    stub._ssw_dim_to_orig = lambda d: d  # identity: no SSW translation in tests
+    stub._orig_dim_to_ssw = lambda d: d  # identity: no SSW translation in tests
+    # _base_orig_dim_sizes: base tile per orig dim (from tile_options[0]); used for iteration scaling
+    if search_space is not None and not search_space.is_empty():
+        stub._base_orig_dim_sizes = {d: search_space.get(d)[0].tile for d in search_space.dims()}
+    else:
+        stub._base_orig_dim_sizes = {}
+    stub._translate_tiling_to_ssw = lambda tiling: tiling  # identity in tests
+    stub._iter_scale_by_jw = {}  # populated during _slot_latency_constraints
+
     return stub, mock_node, slot_lat_var, core
 
 
@@ -1938,9 +2000,11 @@ def test_slot_latency_variable_mode(model):
     lat_coeffs = stub._ssc_node_lat_coeffs[mock_node]
     assert len(lat_coeffs) == 2, f"Expected 2 lat coefficients, got {len(lat_coeffs)}"
 
-    # Verify latency values are correct
+    # Verify latency values are correct (Phase 7: iteration scaling applied)
+    # base_tile=16, candidate 16: lat=10 * 16/16 = 10
+    # base_tile=16, candidate 32: lat=8 * 16/32 = 4
     lats = sorted(lat for lat, _ in lat_coeffs)
-    assert lats == [8, 10], f"Expected latencies [8, 10], got {lats}"
+    assert lats == [4, 10], f"Expected latencies [4, 10], got {lats}"
 
 
 def test_slot_latency_degenerate_single_candidate(model):
