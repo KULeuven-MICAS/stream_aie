@@ -110,12 +110,15 @@ Plans:
 **Depends on**: Phase 6
 **Requirements**: PIPE-01, PIPE-02
 **Success Criteria** (what must be TRUE):
-  1. Running main_swiglu_dse_v2.py --tile_size_options with BIG BOY config and multiple candidates completes without error and reports the selected tile size per dimension
+  1. Running main_swiglu_v2.py with BIG BOY config and multiple candidates completes without error and reports the selected tile size per dimension
   2. The selected tile sizes are valid divisors of their respective workload dimensions
   3. The CO objective on the multi-candidate run is at least as good as the fixed-tile baseline captured in Phase 1
   4. TilingGenerationStage is bypassed/removed when variable tile mode is active — tile sizes come solely from the CO solver
 **UI hint**: no
-**Plans**: TBD
+**Plans**: 2 plans
+Plans:
+- [ ] 07-01-PLAN.md — Pipeline reorder, fusion_splits pre-computation, get_selected_tiles(), post-solve TilingGenerationStage
+- [ ] 07-02-PLAN.md — CLI nargs='+' multi-candidate args, E2E BIG BOY validation test
 
 ## Progress
 
@@ -130,4 +133,4 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6 -> 7
 | 4. Variable SSIS + FIFO Constraints | 2/2 | Complete   | 2026-04-07 |
 | 5. Variable Transfer Latency | 1/1 | Complete   | 2026-04-08 |
 | 6. Variable Compute Latency | 3/3 | Complete   | 2026-04-08 |
-| 7. Pipeline Integration + E2E Validation | 0/? | Not started | - |
+| 7. Pipeline Integration + E2E Validation | 0/2 | Planning complete | - |
