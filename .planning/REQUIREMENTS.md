@@ -27,7 +27,7 @@ Requirements for variable tile size optimization milestone. Each maps to roadmap
 - [x] **CO-03**: Transfer sizes and latencies become linear expressions over tile selection variables
 - [x] **CO-04**: Object FIFO depth constraints use variable tile-dependent sizes
 - [x] **CO-05**: Big-M bounds are computed per-constraint using tight LUT-derived upper bounds (not the existing scalar big_m)
-- [ ] **CO-06**: Computation node latency in slot constraints becomes a linear expression over tile selection variables, using kernel size and Kernel utilization to compute per-candidate cycle counts
+- [x] **CO-06**: Computation node latency in slot constraints becomes a linear expression over tile selection variables, using kernel size and Kernel utilization to compute per-candidate cycle counts
 
 ### Pipeline Integration
 
@@ -72,7 +72,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | CO-02 | Phase 4 | Complete |
 | CO-04 | Phase 4 | Complete |
 | CO-03 | Phase 5 | Complete |
-| CO-06 | Phase 6 | Pending |
+| CO-06 | Phase 6 | Complete |
 | PIPE-01 | Phase 7 | Pending |
 | PIPE-02 | Phase 7 | Pending |
 
