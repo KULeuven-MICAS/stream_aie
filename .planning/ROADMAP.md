@@ -16,7 +16,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [ ] **Phase 2: TileSizeLUT Infrastructure** - Pure-Python utility functions for tensor-size computation per candidate; candidate pre-filtering and SearchSpace infrastructure
 - [ ] **Phase 3: Tile Selection Variables + Memory Constraints** - Binary w[dim,k] variables introduced; memory capacity constraints linearized over tile selection
 - [x] **Phase 4: Variable SSIS + FIFO Constraints** - SSIS loop sizes and object FIFO depth constraints propagate tile selection (completed 2026-04-07)
-- [ ] **Phase 5: Variable Transfer Latency** - Transfer latency constraints linearized over tile selection; all tile-dependent CO quantities complete
+- [x] **Phase 5: Variable Transfer Latency** - Transfer latency constraints linearized over tile selection; all tile-dependent CO quantities complete (completed 2026-04-08)
 - [ ] **Phase 6: Pipeline Integration + E2E Validation** - Variable mode wired through TilingGenerationStage; CLI entry point; BIG BOY end-to-end run
 
 ## Phase Details
@@ -87,7 +87,7 @@ Plans:
   3. The regression test passes with a single-candidate degenerate input after latency changes
 **Plans**: 1 plan
 Plans:
-- [ ] 05-01-PLAN.md — Refactor _active_transfer_latency to pure MILP enumeration, remove NL helpers, add latency unit tests
+- [x] 05-01-PLAN.md — Refactor _active_transfer_latency to pure MILP enumeration, remove NL helpers, add latency unit tests
 
 ### Phase 6: Pipeline Integration + E2E Validation
 **Goal**: Variable tile mode is wired through TilingGenerationStage and a CLI entry point; the CO selects a valid tile size and produces a feasible allocation on SwiGLU BIG BOY with multiple tile candidates
@@ -112,5 +112,5 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6
 | 2. TileSizeLUT Infrastructure | 0/2 | Planning complete | - |
 | 3. Tile Selection Variables + Memory Constraints | 2/3 | In Progress|  |
 | 4. Variable SSIS + FIFO Constraints | 2/2 | Complete   | 2026-04-07 |
-| 5. Variable Transfer Latency | 0/1 | Planning complete | - |
+| 5. Variable Transfer Latency | 1/1 | Complete   | 2026-04-08 |
 | 6. Pipeline Integration + E2E Validation | 0/? | Not started | - |
