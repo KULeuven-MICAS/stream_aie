@@ -1,7 +1,7 @@
 {
-  "latency_total": 1256726906,
-  "latency_per_iteration": 18158,
-  "overlap": 8570,
+  "latency_total": 1030232586,
+  "latency_per_iteration": 14526,
+  "overlap": 6666,
   "fire_counts": {
     "Transfer(input)": 64,
     "Transfer(input_1)": 8192,
@@ -186,7 +186,7 @@
           "dim": "z0",
           "size": 16,
           "relevant": true,
-          "reuse": "No Reuse"
+          "reuse": "Reuse"
         },
         {
           "dim": "z1",
