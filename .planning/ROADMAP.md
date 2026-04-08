@@ -117,7 +117,7 @@ Plans:
 **UI hint**: no
 **Plans**: 2 plans
 Plans:
-- [ ] 07-01-PLAN.md — Pipeline reorder, fusion_splits pre-computation, get_selected_tiles(), post-solve TilingGenerationStage
+- [x] 07-01-PLAN.md — Pipeline reorder, fusion_splits pre-computation, get_selected_tiles(), post-solve TilingGenerationStage
 - [ ] 07-02-PLAN.md — CLI nargs='+' multi-candidate args, E2E BIG BOY validation test
 
 ## Progress
