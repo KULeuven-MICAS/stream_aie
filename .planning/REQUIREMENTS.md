@@ -1,86 +1,50 @@
-# Requirements: Stream AIE — Variable Tile Size Optimization
+# Requirements: Stream AIE — Latency Parity & Iterations Fix
 
-**Defined:** 2026-04-02
-**Core Value:** Enable the constraint optimizer to explore variable tile sizes across workload dimensions
+**Defined:** 2026-04-08
+**Core Value:** Ensure the variable tile CO produces identical results to the original fixed-tile pipeline for the same tile sizes
 
-## v2.0 Requirements
+## v2.1 Requirements
 
-Requirements for variable tile size optimization milestone. Each maps to roadmap phases.
+### Latency Computation Parity
 
-### Baseline & Testing
+- [ ] **LAT-01**: TileAwareLatencyEstimator.estimate() produces the same MACs and cycle counts as the old AIECostEstimator + CoreCostLUT for identical tile sizes and workload dimensions
+- [ ] **LAT-02**: _slot_latency_constraints correctly accounts for temporal splits (fusion_splits) without double-counting when the CO runs on the untiled workload
+- [ ] **LAT-03**: The single-candidate degenerate case reproduces the original Phase 1 baseline exactly: latency_total=922357343, latency_per_iteration=10716
 
-- [x] **BASE-01**: New main entry file (main_swiglu_v2.py) runs the existing fixed-tile pipeline end-to-end with BIG BOY config (256x2048x8192, tiles 16/128/32)
-- [ ] **BASE-02**: Regression test captures baseline CO objective value, z_stop assignments, and fire counts for BIG BOY fixed-tile config
+### Iterations Correctness
 
-### Tile Size Infrastructure
+- [ ] **ITER-01**: The iterations parameter equals prod(T) over all temporal dimensions, where T = workload_size / (K * S) for each dimension
+- [ ] **ITER-02**: With variable tiles, iterations is consistent with the selected tile sizes post-solve (not computed from a fixed pre-solve tiling)
 
-- [ ] **TILE-01**: User can specify a single list of candidate tile sizes as input to the optimization
-- [ ] **TILE-02**: Utility functions compute tensor sizes per candidate tile for each unique dimension on demand (tensor_size_bits wrapper)
-- [x] **TILE-03**: One-hot binary selection variables (w[dim, k]) added to CO model with SOS1 constraints for each unique workload dimension
-- [ ] **TILE-04**: Candidate tile sizes are pre-filtered for divisibility against each workload dimension and memory feasibility
-- [x] **TILE-05**: Utility functions compute SSIS loop sizes, reuse levels, and transfer sizes per candidate tile (added incrementally in Phases 3-5 as each CO constraint type needs them)
+### Validation
 
-### CO Variable Integration
-
-- [x] **CO-01**: Tensor sizes in memory capacity constraints become linear expressions over tile selection variables using TileSizeLUT coefficients
-- [x] **CO-02**: SSIS loop sizes (kernel and temporal) become linear expressions over tile selection variables, updating reuse_levels, fire counts, and buffer depth constraints
-- [x] **CO-03**: Transfer sizes and latencies become linear expressions over tile selection variables
-- [x] **CO-04**: Object FIFO depth constraints use variable tile-dependent sizes
-- [x] **CO-05**: Big-M bounds are computed per-constraint using tight LUT-derived upper bounds (not the existing scalar big_m)
-- [x] **CO-06**: Computation node latency in slot constraints becomes a linear expression over tile selection variables, using kernel size and Kernel utilization to compute per-candidate cycle counts
-
-### Pipeline Integration
-
-- [x] **PIPE-01**: End-to-end validation: variable tile CO on SwiGLU BIG BOY config selects valid tile sizes and produces a feasible allocation
-- [ ] **PIPE-02**: TilingGenerationStage removed from the variable tile pipeline path — tile sizes are determined by the CO solver, not a preceding stage
-
-## Future Requirements
-
-Deferred to future milestone. Tracked but not in current roadmap.
-
-### Optimization Enhancements
-
-- **OPT-01**: Warm-start CO from fixed-tile solution for faster convergence
-- **OPT-02**: Tile efficiency objective term penalizing wasteful tile sizes
-- **OPT-03**: Per-dimension different tile size candidate lists
+- [ ] **VAL-01**: COAnalysis.compare_latency_with_estimator() shows zero mismatches for both single-candidate and multi-candidate runs
+- [ ] **VAL-02**: All existing unit tests (108) and regression tests pass after fixes
 
 ## Out of Scope
 
 | Feature | Reason |
 |---------|--------|
-| Per-layer tile sizes | Breaks `_ensure_same_ssis_for_all_transfers` invariant; requires major refactoring |
-| Codegen changes | Focus on CO optimization; codegen adapts downstream |
-| New workload types | SwiGLU is the validation target for this milestone |
-| Genetic algorithm path | CO path only for variable tiles |
-| Real-time/online tile selection | Tile selection is a design-time optimization |
+| New workload types | SwiGLU is the validation target for this fix |
+| Performance optimization | Focus is correctness, not solver speed |
+| Multi-candidate E2E improvement | Fix parity first, then optimize |
 
 ## Traceability
 
-Which phases cover which requirements. Updated during roadmap creation.
-
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| BASE-01 | Phase 1 | Complete |
-| BASE-02 | Phase 1 | Pending |
-| TILE-01 | Phase 2 | Pending |
-| TILE-02 | Phase 2 | Pending |
-| TILE-04 | Phase 2 | Pending |
-| TILE-03 | Phase 3 | Complete |
-| TILE-05 | Phases 3-5 | Complete |
-| CO-01 | Phase 3 | Complete |
-| CO-05 | Phase 3 | Complete |
-| CO-02 | Phase 4 | Complete |
-| CO-04 | Phase 4 | Complete |
-| CO-03 | Phase 5 | Complete |
-| CO-06 | Phase 6 | Complete |
-| PIPE-01 | Phase 7 | Complete |
-| PIPE-02 | Phase 7 | Pending |
+| LAT-01 | Phase 8 | Pending |
+| LAT-02 | Phase 8 | Pending |
+| LAT-03 | Phase 8 | Pending |
+| ITER-01 | Phase 9 | Pending |
+| ITER-02 | Phase 9 | Pending |
+| VAL-01 | Phase 9 | Pending |
+| VAL-02 | Phase 9 | Pending |
 
 **Coverage:**
-- v2.0 requirements: 15 total
-- Mapped to phases: 15
+- v2.1 requirements: 7 total
+- Mapped to phases: 7
 - Unmapped: 0
 
 ---
-*Requirements defined: 2026-04-02*
-*Last updated: 2026-04-02 after checker revision (TILE-02 narrowed, TILE-05 added)*
+*Requirements defined: 2026-04-08*
