@@ -1790,3 +1790,281 @@ def test_no_genconstr_nl_in_model(model):
     assert model.NumGenConstrs == 0, (
         f"Expected 0 general constraints (NL), got {model.NumGenConstrs}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Phase 6 — Slot latency linearization tests
+# ---------------------------------------------------------------------------
+
+
+def _make_slot_latency_stub(model: gp.Model, search_space, latency_estimate_per_combo=None):
+    """Build a minimal stub for _slot_latency_constraints and _create_idle_latency_vars testing.
+
+    Provides:
+      - One ssc_node mapped to slot 0
+      - slot_latency[0] = gp.Var
+      - latency_estimator = mock returning known LatencyEstimate values
+      - workload with mocked get_unique_dims_inter_core_tiling and get_dimension_size
+      - mapping with mocked get(node).resource_allocation
+      - search_space (passed in, may be None)
+      - _ssc_node_lat_coeffs = {}
+    """
+    from stream.cost_model.tile_aware_latency import LatencyEstimate
+    from stream.datatypes import LayerDim
+    from stream.opt.allocation.constraint_optimization.transfer_and_tensor_allocation import (
+        TransferAndTensorAllocator,
+    )
+
+    stub = types.SimpleNamespace()
+    stub.model = model
+    stub.search_space = search_space
+    stub._ssc_node_lat_coeffs = {}
+    stub._tensor_joint_candidates = {}
+    stub.w = {}
+    stub.tile_var = {}
+
+    # Create a mock computation node
+    mock_node = MagicMock()
+    mock_node.name = "test_ssc_node"
+
+    # Create slot latency var
+    slot_lat_var = model.addVar(vtype=GRB.INTEGER, lb=0, name="slot_latency_0")
+    model.update()
+
+    stub.ssc_nodes = [mock_node]
+    stub.slot_of = {mock_node: 0}
+    stub.slot_latency = {0: slot_lat_var}
+
+    # Mock core
+    from stream.hardware.architecture.core import Core
+    core = MagicMock(spec=Core)
+    core.id = 1
+
+    # Mock mapping: mapping.get(node).resource_allocation[0] = {core}
+    mapping = MagicMock()
+    node_mapping = MagicMock()
+    node_mapping.resource_allocation = [{core}]
+    mapping.get.return_value = node_mapping
+    stub.mapping = mapping
+
+    # Mock workload
+    workload = MagicMock()
+    # get_unique_dims_inter_core_tiling returns list of (dim, factor) pairs
+    # Using dim(0) as the tiled dim with factor=4
+    d0 = _dim(0)
+    base_tiling = ((d0, 4),)
+    workload.get_unique_dims_inter_core_tiling.return_value = base_tiling
+    workload.get_dimension_size.return_value = 64  # workload_size for dim(0)
+    stub.workload = workload
+
+    # Mock latency_estimator
+    from stream.cost_model.tile_aware_latency import LatencyEstimate
+    latency_estimator = MagicMock()
+    if latency_estimate_per_combo is None:
+        # Default: returns latency 10 per candidate
+        latency_estimator.estimate.return_value = LatencyEstimate(latency_total=10, ideal_cycle=8, energy_total=0.0)
+    else:
+        latency_estimator.estimate.side_effect = latency_estimate_per_combo
+    stub.latency_estimator = latency_estimator
+
+    # Bind the methods under test
+    stub._slot_latency_constraints = (
+        TransferAndTensorAllocator._slot_latency_constraints.__get__(stub)
+    )
+    stub._create_idle_latency_vars = (
+        TransferAndTensorAllocator._create_idle_latency_vars.__get__(stub)
+    )
+    stub._add_binary_product = TransferAndTensorAllocator._add_binary_product.__get__(stub)
+    stub._safe_name = TransferAndTensorAllocator._safe_name.__get__(stub)
+    stub._joint_binary_for_combo = TransferAndTensorAllocator._joint_binary_for_combo.__get__(stub)
+    stub._add_binary_scaled_continuous = TransferAndTensorAllocator._add_binary_scaled_continuous.__get__(stub)
+
+    return stub, mock_node, slot_lat_var, core
+
+
+def _build_ss_for_slot(candidates: list[int]) -> "SearchSpace":
+    """Build a SearchSpace with dim(0) having the given candidates."""
+    return _build_search_space({0: candidates})
+
+
+def test_slot_latency_variable_mode(model):
+    """Test 1: With 2+ candidates, _slot_latency_constraints creates quicksum(lat*jw) expression.
+
+    Setup:
+    - search_space: dim(0) with candidates [16, 32]
+    - workload: dim(0) tiled with factor=4, workload_size=64
+    - latency_estimator returns lat=10 for tile=16, lat=8 for tile=32
+    - After calling _slot_latency_constraints:
+      * model should have constraint ssc_lat_{node.name}
+      * 2 lat_coeffs cached in _ssc_node_lat_coeffs
+    """
+    ss = _build_ss_for_slot([16, 32])
+
+    from stream.opt.allocation.constraint_optimization.transfer_and_tensor_allocation import (
+        TransferAndTensorAllocator,
+    )
+    from stream.cost_model.tile_aware_latency import LatencyEstimate
+
+    stub, mock_node, slot_lat_var, core = _make_slot_latency_stub(model, ss)
+
+    # Pre-create w vars via __create_tile_selection_vars
+    stub._TransferAndTensorAllocator__create_tile_selection_vars = (
+        TransferAndTensorAllocator._TransferAndTensorAllocator__create_tile_selection_vars.__get__(stub)
+    )
+    stub._TransferAndTensorAllocator__create_tile_selection_vars()
+    model.update()
+
+    # estimator returns different latency per candidate
+    estimates = [
+        LatencyEstimate(latency_total=10, ideal_cycle=8, energy_total=0.0),
+        LatencyEstimate(latency_total=8, ideal_cycle=7, energy_total=0.0),
+    ]
+    stub.latency_estimator.estimate.side_effect = estimates
+
+    n_constrs_before = model.NumConstrs
+    stub._slot_latency_constraints()
+    model.update()
+
+    # Constraint was added
+    assert model.NumConstrs > n_constrs_before, "Expected at least one constraint added"
+    constraint_names = {c.ConstrName for c in model.getConstrs()}
+    assert f"ssc_lat_{mock_node.name}" in constraint_names, (
+        f"Expected constraint 'ssc_lat_{mock_node.name}', got: {constraint_names}"
+    )
+
+    # _ssc_node_lat_coeffs was populated with 2 entries (one per candidate)
+    assert mock_node in stub._ssc_node_lat_coeffs, "Expected lat coeffs to be cached"
+    lat_coeffs = stub._ssc_node_lat_coeffs[mock_node]
+    assert len(lat_coeffs) == 2, f"Expected 2 lat coefficients, got {len(lat_coeffs)}"
+
+    # Verify latency values are correct
+    lats = sorted(lat for lat, _ in lat_coeffs)
+    assert lats == [8, 10], f"Expected latencies [8, 10], got {lats}"
+
+
+def test_slot_latency_degenerate_single_candidate(model):
+    """Test 2: Single candidate produces same RHS as scalar mode.
+
+    With exactly 1 candidate, the constraint is effectively: slot_latency >= lat_single.
+    This is the degenerate case per D-02.
+    """
+    ss = _build_ss_for_slot([16])  # single candidate
+
+    from stream.opt.allocation.constraint_optimization.transfer_and_tensor_allocation import (
+        TransferAndTensorAllocator,
+    )
+    from stream.cost_model.tile_aware_latency import LatencyEstimate
+
+    stub, mock_node, slot_lat_var, core = _make_slot_latency_stub(model, ss)
+    stub._TransferAndTensorAllocator__create_tile_selection_vars = (
+        TransferAndTensorAllocator._TransferAndTensorAllocator__create_tile_selection_vars.__get__(stub)
+    )
+    stub._TransferAndTensorAllocator__create_tile_selection_vars()
+    model.update()
+
+    # Single candidate with latency 12
+    stub.latency_estimator.estimate.return_value = LatencyEstimate(
+        latency_total=12, ideal_cycle=10, energy_total=0.0
+    )
+
+    stub._slot_latency_constraints()
+    model.update()
+
+    # Constraint exists
+    constraint_names = {c.ConstrName for c in model.getConstrs()}
+    assert f"ssc_lat_{mock_node.name}" in constraint_names
+
+    # Exactly 1 lat_coeff cached
+    lat_coeffs = stub._ssc_node_lat_coeffs[mock_node]
+    assert len(lat_coeffs) == 1
+    assert lat_coeffs[0][0] == 12
+
+
+def test_slot_latency_scalar_fallback(model):
+    """Test 3: When search_space is None, _slot_latency_constraints uses cost_lut scalar path.
+
+    With no search_space, the constraint should use cost_lut.get_cost() instead of
+    latency_estimator. The latency_estimator.estimate method should NOT be called.
+    """
+    from stream.opt.allocation.constraint_optimization.transfer_and_tensor_allocation import (
+        TransferAndTensorAllocator,
+    )
+
+    stub, mock_node, slot_lat_var, core = _make_slot_latency_stub(model, search_space=None)
+
+    # Set up cost_lut mock for scalar fallback
+    cost_entry = MagicMock()
+    cost_entry.latency_total = 15.0
+    cost_lut = MagicMock()
+    cost_lut.get_cost.return_value = cost_entry
+    cost_lut.get_cores.return_value = [core]
+    stub.cost_lut = cost_lut
+
+    stub._slot_latency_constraints()
+    model.update()
+
+    # latency_estimator.estimate was NOT called (scalar fallback)
+    stub.latency_estimator.estimate.assert_not_called()
+
+    # Constraint was added
+    constraint_names = {c.ConstrName for c in model.getConstrs()}
+    assert f"ssc_lat_{mock_node.name}" in constraint_names
+
+    # lat_coeffs should contain the scalar value (15)
+    lat_coeffs = stub._ssc_node_lat_coeffs[mock_node]
+    assert len(lat_coeffs) == 1
+    # scalar mode: (runtime, None)
+    assert lat_coeffs[0][0] == 15
+    assert lat_coeffs[0][1] is None
+
+
+def test_slot_latency_ub_variable_mode(model):
+    """Test 4: _create_idle_latency_vars uses max over candidate latencies for slot_latency_ub.
+
+    Setup: populate _ssc_node_lat_coeffs with two candidates having lats 8 and 12.
+    Call _create_idle_latency_vars with max_s=0.
+    Verify that the slot_latency_ub used is >= max(8, 12) = 12.
+    """
+    from stream.opt.allocation.constraint_optimization.transfer_and_tensor_allocation import (
+        TransferAndTensorAllocator,
+    )
+
+    stub, mock_node, slot_lat_var, core = _make_slot_latency_stub(model, search_space=None)
+
+    # Pre-populate _ssc_node_lat_coeffs with known coefficients
+    jw1 = model.addVar(vtype=GRB.BINARY, name="jw_ub_1")
+    jw2 = model.addVar(vtype=GRB.BINARY, name="jw_ub_2")
+    model.update()
+    stub._ssc_node_lat_coeffs[mock_node] = [(8, jw1), (12, jw2)]
+
+    # No transfer nodes (simplify test)
+    stub.transfer_nodes = []
+
+    # Set up idleS to have one resource at slot 0
+    from stream.hardware.architecture.noc.communication_link import CommunicationLink
+    link = MagicMock(spec=CommunicationLink)
+    link.id = "test_link"
+
+    is_ = model.addVar(vtype=GRB.BINARY, name="idleS_link_0")
+    model.update()
+    stub.idleS = {(link, 0): is_}
+    stub.idleE = {}
+
+    # Track call to _add_binary_scaled_continuous to capture ub passed
+    captured_ubs = []
+    original_method = TransferAndTensorAllocator._add_binary_scaled_continuous
+
+    def tracking_method(binary_var, continuous_var, continuous_ub, base_name):
+        captured_ubs.append(continuous_ub)
+        return original_method(stub, binary_var=binary_var, continuous_var=continuous_var,
+                               continuous_ub=continuous_ub, base_name=base_name)
+
+    stub._add_binary_scaled_continuous = tracking_method
+
+    stub._create_idle_latency_vars(max_s=0)
+    model.update()
+
+    # The slot_latency_ub used should be >= 12 (max of our coeffs)
+    assert len(captured_ubs) > 0, "Expected _add_binary_scaled_continuous to be called"
+    max_ub_used = max(captured_ubs)
+    assert max_ub_used >= 12, f"Expected slot_latency_ub >= 12 (max of [8, 12]), got {max_ub_used}"
