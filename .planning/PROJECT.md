@@ -27,7 +27,7 @@ Enable the constraint optimizer to explore variable tile sizes across workload d
 - [ ] Baseline validation with per-dimension tile sizes (BIG BOY: 256x2048x8192, tiles 16/128/32)
 - [ ] User-defined list of possible tile sizes as CO input
 - [x] Variable tensor sizes in CO (dependent on selected tile) — Validated in Phase 3
-- [ ] Variable ComputationNode sizes in CO
+- [x] Variable ComputationNode sizes in CO — Validated in Phase 6 (TileAwareLatencyEstimator, CoreCostLUT removed)
 - [x] Variable transfer sizes in CO — Validated in Phase 5 (pure MILP latency, addGenConstrNL eliminated)
 - [x] Variable SSIS loop sizes (kernel and temporal) in CO — Validated in Phase 4
 - [x] CO selects optimal tile size per unique workload dimension — Validated in Phase 3 (w[dim,k] binary selection variables)
@@ -94,4 +94,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-04-08 after Phase 5 completion — variable transfer latency, pure MILP model*
+*Last updated: 2026-04-08 after Phase 6 completion — variable compute latency, CoreCostLUT removed*
