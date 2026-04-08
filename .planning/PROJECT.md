@@ -50,16 +50,16 @@ Enable the constraint optimizer to explore variable tile sizes across workload d
 - `main_swiglu.py` has CLI args for tile sizes; `main_swiglu_dse_single.py` has hardcoded mapping path
 - BIG BOY config: seq_len=256, embedding_dim=2048, hidden_dim=8192, tiles 16/128/32, 4 rows x 8 cols, NPU2
 
-## Current Milestone: v2.0 Variable Tile Size Optimization
+## Current Milestone: v2.1 Latency Parity & Iterations Fix
 
-**Goal:** Integrate variable tile sizes into the constraint optimization, allowing the CO solver to select optimal tile sizes from a user-defined list across all unique workload dimensions.
+**Goal:** Fix the latency computation discrepancy introduced during v2.0 pipeline reorder and ensure the iterations parameter correctly reflects tile-dependent temporal loop counts.
 
 **Target features:**
-- Baseline validation with existing per-dimension tile sizes
-- New main file for v2.0 variable tile DSE
-- CO variables for tile size selection
-- Dynamic tensor/computation/transfer/SSIS sizes dependent on tile selection
-- End-to-end validation with SwiGLU BIG BOY config
+- TileAwareLatencyEstimator produces identical MACs and cycle counts as the old CoreCostLUT path for the same tile sizes
+- Temporal split accounting in _slot_latency_constraints correctly handles the untiled-workload pipeline without double-counting
+- iterations = prod(T) where T = workload_size / (K * S) per temporal dimension, updated when tile selection changes T
+- Single-candidate degenerate case reproduces the original Phase 1 baseline exactly (latency_total=922357343, latency_per_iteration=10716)
+- COAnalysis class validates latency parity post-solve
 
 ## Constraints
 
@@ -94,4 +94,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-04-08 after Phase 7 completion — milestone v2.0 complete, variable tile size optimization fully integrated*
+*Last updated: 2026-04-08 after v2.1 milestone start — latency parity and iterations fix*

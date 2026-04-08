@@ -1,9 +1,9 @@
 ---
 gsd_state_version: 1.0
-milestone: v2.0
-milestone_name: milestone
-status: verifying
-stopped_at: Completed 07-pipeline-integration-e2e-validation/07-02-PLAN.md
+milestone: v2.1
+milestone_name: Latency Parity & Iterations Fix
+status: defining_requirements
+stopped_at: Milestone v2.1 started
 last_updated: "2026-04-08T17:48:31.241Z"
 last_activity: 2026-04-08
 progress:
