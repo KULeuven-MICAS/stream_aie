@@ -17,7 +17,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [ ] **Phase 3: Tile Selection Variables + Memory Constraints** - Binary w[dim,k] variables introduced; memory capacity constraints linearized over tile selection
 - [x] **Phase 4: Variable SSIS + FIFO Constraints** - SSIS loop sizes and object FIFO depth constraints propagate tile selection (completed 2026-04-07)
 - [x] **Phase 5: Variable Transfer Latency** - Transfer latency constraints linearized over tile selection; all tile-dependent CO quantities complete (completed 2026-04-08)
-- [ ] **Phase 6: Variable Compute Latency** - Computation node latency in slot constraints becomes tile-dependent using kernel size and Kernel utilization
+- [x] **Phase 6: Variable Compute Latency** - Computation node latency in slot constraints becomes tile-dependent using kernel size and Kernel utilization (completed 2026-04-08)
 - [ ] **Phase 7: Pipeline Integration + E2E Validation** - TilingGenerationStage removed from variable path; CLI entry point; BIG BOY end-to-end run with multi-candidate tile selection
 
 ## Phase Details
@@ -101,9 +101,9 @@ Plans:
   4. The regression test passes with a single-candidate degenerate input after compute latency changes
 **Plans**: 3 plans
 Plans:
-- [ ] 06-01-PLAN.md — TileAwareLatencyEstimator + CO slot latency linearization
-- [ ] 06-02-PLAN.md — Pipeline wiring: SSS + CO allocation stage + CoreCostEstimation migration
-- [ ] 06-03-PLAN.md — Remove CoreCostLUT, migrate all remaining consumers
+- [x] 06-01-PLAN.md — TileAwareLatencyEstimator + CO slot latency linearization
+- [x] 06-02-PLAN.md — Pipeline wiring: SSS + CO allocation stage + CoreCostEstimation migration
+- [x] 06-03-PLAN.md — Remove CoreCostLUT, migrate all remaining consumers
 
 ### Phase 7: Pipeline Integration + E2E Validation
 **Goal**: TilingGenerationStage is removed from the variable tile pipeline path (tile sizes are now CO-determined); a CLI entry point runs multi-candidate tile selection end-to-end on SwiGLU BIG BOY
@@ -129,5 +129,5 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6 -> 7
 | 3. Tile Selection Variables + Memory Constraints | 2/3 | In Progress|  |
 | 4. Variable SSIS + FIFO Constraints | 2/2 | Complete   | 2026-04-07 |
 | 5. Variable Transfer Latency | 1/1 | Complete   | 2026-04-08 |
-| 6. Variable Compute Latency | 0/3 | Planning complete | - |
+| 6. Variable Compute Latency | 3/3 | Complete   | 2026-04-08 |
 | 7. Pipeline Integration + E2E Validation | 0/? | Not started | - |
