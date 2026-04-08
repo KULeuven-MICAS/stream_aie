@@ -2,7 +2,6 @@ import json
 import logging
 from typing import TYPE_CHECKING
 
-from stream.cost_model.core_cost_lut import CoreCostLUT
 from stream.hardware.architecture.accelerator import Accelerator
 from stream.opt.allocation.constraint_optimization.timeslot_allocation import TimeSlotAllocation
 from stream.opt.allocation.constraint_optimization.utils import (
@@ -19,18 +18,16 @@ logger = logging.getLogger(__name__)
 
 def to_perfetto_json(
     allocation: TimeSlotAllocation,
-    cost_lut: CoreCostLUT,
     accelerator: Accelerator,
     latency_attr: str,
     json_path: str,
 ):
     """
     Allocation is a list of tuples, with each tuple being of form (timestep, allocation, node_id). Allocation is a core.
-    cost_lut is a CoreCostLUT storing for each node and each core the hardware performance.
     """
     timesteps = allocation.slots
     resources = allocation.resources
-    node_latencies = get_node_latencies(allocation, cost_lut, accelerator, latency_attr)
+    node_latencies = get_node_latencies(allocation, None, accelerator, latency_attr)
     timestep_latencies = get_timestep_latencies(allocation, timesteps)
     starts = get_node_start_timesteps(allocation, timestep_latencies)
     # total_timestep_latency = sum(timestep_latencies.values())

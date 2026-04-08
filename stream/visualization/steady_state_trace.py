@@ -53,7 +53,6 @@ from __future__ import annotations
 import json
 import logging
 import os
-from math import ceil
 from typing import TYPE_CHECKING
 
 from stream.hardware.architecture.core import Core
@@ -287,16 +286,7 @@ def export_steady_state_trace(  # noqa: PLR0912, PLR0915
         # ── Computation node events (one per core group) ── #
         for node in tta.ssc_nodes:
             slot = tta.slot_of[node]
-            eq_node = tta.cost_lut.get_equal_node(node)
-            if eq_node is not None:
-                lut_cores = tta.cost_lut.get_cores(eq_node)
-                node_dur: float = (
-                    float(ceil(max(tta.cost_lut.get_cost(eq_node, c).latency_total for c in lut_cores)))
-                    if lut_cores
-                    else slot_lat[slot]
-                )
-            else:
-                node_dur = slot_lat[slot]
+            node_dur: float = slot_lat[slot]
 
             for rel_iter in shown_iterations:
                 label = _ITER_LABEL[rel_iter]
@@ -419,16 +409,7 @@ def export_steady_state_trace(  # noqa: PLR0912, PLR0915
         # Computation node events
         for node in tta.ssc_nodes:
             slot = tta.slot_of[node]
-            eq_node = tta.cost_lut.get_equal_node(node)
-            if eq_node is not None:
-                lut_cores = tta.cost_lut.get_cores(eq_node)
-                node_dur: float = (
-                    float(ceil(max(tta.cost_lut.get_cost(eq_node, c).latency_total for c in lut_cores)))
-                    if lut_cores
-                    else slot_lat[slot]
-                )
-            else:
-                node_dur = slot_lat[slot]
+            node_dur: float = slot_lat[slot]
 
             alloc_cores = [core for group in tta.mapping.get(node).resource_allocation for core in group]
 

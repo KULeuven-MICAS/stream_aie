@@ -1982,30 +1982,30 @@ def test_slot_latency_degenerate_single_candidate(model):
 
 
 def test_slot_latency_scalar_fallback(model):
-    """Test 3: When search_space is None, _slot_latency_constraints uses cost_lut scalar path.
+    """Test 3: When search_space is None, _slot_latency_constraints uses latency_estimator scalar path.
 
-    With no search_space, the constraint should use cost_lut.get_cost() instead of
-    latency_estimator. The latency_estimator.estimate method should NOT be called.
+    With no search_space, the constraint should use latency_estimator.estimate() with the node's
+    inter_core_tiling. CoreCostLUT is no longer used.
     """
     from stream.opt.allocation.constraint_optimization.transfer_and_tensor_allocation import (
         TransferAndTensorAllocator,
     )
+    from stream.cost_model.tile_aware_latency import LatencyEstimate
 
     stub, mock_node, slot_lat_var, core = _make_slot_latency_stub(model, search_space=None)
 
-    # Set up cost_lut mock for scalar fallback
-    cost_entry = MagicMock()
-    cost_entry.latency_total = 15.0
-    cost_lut = MagicMock()
-    cost_lut.get_cost.return_value = cost_entry
-    cost_lut.get_cores.return_value = [core]
-    stub.cost_lut = cost_lut
+    # Configure latency_estimator to return latency=15
+    stub.latency_estimator.estimate.return_value = LatencyEstimate(
+        latency_total=15, ideal_cycle=12, energy_total=0.0
+    )
+    # Set inter_core_tiling on mock_node
+    mock_node.inter_core_tiling = []
 
     stub._slot_latency_constraints()
     model.update()
 
-    # latency_estimator.estimate was NOT called (scalar fallback)
-    stub.latency_estimator.estimate.assert_not_called()
+    # latency_estimator.estimate WAS called (new scalar fallback)
+    stub.latency_estimator.estimate.assert_called_once()
 
     # Constraint was added
     constraint_names = {c.ConstrName for c in model.getConstrs()}

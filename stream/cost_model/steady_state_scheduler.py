@@ -8,7 +8,6 @@ from xdsl.ir.affine import AffineMap
 
 # if TYPE_CHECKING:
 from stream.cost_model.communication_manager import MulticastPathPlan
-from stream.cost_model.core_cost_lut import CoreCostLUT
 from stream.datatypes import InterCoreTiling, LayerDim
 from stream.hardware.architecture.accelerator import Accelerator
 from stream.hardware.architecture.core import Core
@@ -54,7 +53,6 @@ class SteadyStateScheduler:
         accelerator: "Accelerator",
         mapping: Mapping,
         fusion_splits: dict[LayerDim, int],
-        cost_lut: CoreCostLUT | None = None,
         nb_cols_to_use: int = 4,
         output_path: str = "",
         search_space: SearchSpace | None = None,
@@ -70,7 +68,6 @@ class SteadyStateScheduler:
         self.accelerator = accelerator
         self.mapping = mapping
         self.fusion_splits = fusion_splits
-        self.cost_lut = cost_lut
         self.latency_estimator = latency_estimator
         self.partitioned_nodes: dict[ComputationNode, list[SteadyStateComputation]] = {}
         self.constant_tensors: dict[int, InEdge | OutEdge] = {}
@@ -103,9 +100,6 @@ class SteadyStateScheduler:
         self.ssw.visualize(os.path.join(self.output_path, "tiled_workload_with_transfers.png"))
         # Update the mapping for the new workload graph
         self.mapping = self.update_mapping()
-        # Update the cost lut for the new workload graph (only if present)
-        if self.cost_lut is not None:
-            self.cost_lut = self.update_cost_lut()
         # Reconstruct latency_estimator with updated workload/mapping after transfer graph build (Pitfall 3)
         if self.latency_estimator is not None:
             self.latency_estimator = TileAwareLatencyEstimator(self.ssw, self.mapping)
@@ -126,7 +120,6 @@ class SteadyStateScheduler:
             ssis=self.ssis,
             multiplicities=multiplicities,
             mapping=self.mapping,
-            cost_lut=self.cost_lut,
             nb_cols_to_use=self.nb_cols_to_use,
             output_path=self.output_path,
             search_space=self.search_space,
@@ -406,13 +399,6 @@ class SteadyStateScheduler:
             assert len(self.mapping.get(tr).resource_allocation) == 1, (
                 f"Transfer node {tr.name} should have exactly one resource allocation after update."
             )
-
-    def update_cost_lut(self):
-        # The new workload contains same computation node names but with different input tensors
-        for new_node in self.ssw.get_computation_nodes():
-            old_node = next(n for n in self.cost_lut.get_nodes() if n.name == new_node.name)
-            self.cost_lut.replace_node(old_node, new_node)
-        return self.cost_lut
 
     def generate_transfer_node(
         self, dsts: list[HasInputs], tensor: Tensor, transfer_type: TransferType, out_name: str = ""

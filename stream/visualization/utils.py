@@ -3,7 +3,6 @@ from typing import TYPE_CHECKING
 import numpy as np
 import pandas as pd
 
-from stream.cost_model.core_cost_lut import CoreCostLUT
 from stream.hardware.architecture.noc.communication_link import CommunicationLink
 from stream.workload.computation.computation_node import ComputationNode
 
@@ -67,49 +66,14 @@ def get_real_input_tensors(n, g):
 
 
 def get_spatial_utilizations(
-    scme: "StreamCostModelEvaluation", node: "ComputationNode", cost_lut: "CoreCostLUT | None"
+    scme: "StreamCostModelEvaluation", node: "ComputationNode", cost_lut=None
 ):
-    if cost_lut:
-        equal_node = cost_lut.get_equal_node(node)
-        assert equal_node, f"No equal node for {node} found in CoreCostLUT. Check if pre/post LUT path is correct."
-        assert isinstance(node.chosen_core_allocation, int), (
-            f"Chosen core allocation for {node} should be an integer, got {type(node.chosen_core_allocation)}."
-        )
-        core = scme.accelerator.get_core(node.chosen_core_allocation)
-        cme = cost_lut.get_cost(equal_node, core)
-        return (
-            getattr(cme, "mac_spatial_utilization", np.nan),
-            getattr(cme, "mac_utilization1", np.nan),
-        )
+    # cost_lut is kept as an optional backward-compat param but no longer used.
     return np.nan, np.nan
 
 
-def get_energy_breakdown(scme: "StreamCostModelEvaluation", node: "ComputationNode", cost_lut: "CoreCostLUT | None"):
-    if cost_lut:
-        equal_node = cost_lut.get_equal_node(node)
-        assert equal_node, f"No equal node for {node} found in CoreCostLUT. Check if pre/post LUT path is correct."
-        assert isinstance(node.chosen_core_allocation, int), (
-            f"Chosen core allocation for {node} should be an integer, got {type(node.chosen_core_allocation)}."
-        )
-        core = scme.accelerator.get_core(node.chosen_core_allocation)
-        cme = cost_lut.get_cost(equal_node, core)
-        total_ops = getattr(cme.layer, "total_mac_count", None)
-        if not total_ops:
-            return np.nan, {}
-        en_total_per_op = getattr(cme, "energy_total", 0) / total_ops
-        en_breakdown = getattr(cme, "mem_energy_breakdown", {}) or {}
-        en_breakdown_per_op = {}
-        energy_sum_check = 0
-        for layer_op, energies_for_all_levels in en_breakdown.items():
-            d = {}
-            mem_op = cme.layer.memory_operand_links[layer_op]
-            for mem_level_idx, en in enumerate(energies_for_all_levels):
-                mem_name = cme.accelerator.get_memory_level(mem_op, mem_level_idx).name
-                d[mem_name] = en / total_ops
-                energy_sum_check += en
-            en_breakdown_per_op[layer_op] = d
-        assert np.isclose(energy_sum_check, cme.mem_energy)
-        return en_total_per_op, en_breakdown_per_op
+def get_energy_breakdown(scme: "StreamCostModelEvaluation", node: "ComputationNode", cost_lut=None):
+    # cost_lut is kept as an optional backward-compat param but no longer used.
     return np.nan, np.nan
 
 
@@ -117,7 +81,7 @@ def get_dataframe_from_scme(
     scme: "StreamCostModelEvaluation",
     layer_ids: list[int],
     add_communication: bool = False,
-    cost_lut: "CoreCostLUT | None" = None,
+    cost_lut=None,
 ):
     nodes = scme.workload.topological_sort()
     dicts = []

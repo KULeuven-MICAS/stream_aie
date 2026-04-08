@@ -20,7 +20,7 @@ SCHEDULE_ORDER_T: TypeAlias = list[tuple[int, int]]
 class ConstraintOptimizationAllocationStage(Stage):
     """
     Class that finds the best workload allocation for the workload using constraint optimization.
-    This stages requires a CoreCostLUT, containing for each node and its valid core allocations the best CME.
+    This stage requires a TileAwareLatencyEstimator (from CoreCostEstimationStage) for node latency computation.
     """
 
     REQUIRED_FIELDS = (
@@ -41,7 +41,6 @@ class ConstraintOptimizationAllocationStage(Stage):
         self.accelerator: Accelerator = self.ctx.get("accelerator")
         self.mapping: Mapping = self.ctx.get("mapping")
         self.fusion_splits: dict[LayerDim, int] = self.ctx.get("fusion_splits")
-        self.cost_lut = self.ctx.get("cost_lut")
         self.latency_estimator = self.ctx.get("latency_estimator")
 
         config = self.ctx.get("constraint_opt_config")
@@ -75,7 +74,6 @@ class ConstraintOptimizationAllocationStage(Stage):
             self.accelerator,
             self.mapping,
             self.fusion_splits,
-            cost_lut=self.cost_lut,
             nb_cols_to_use=self.config.transfer.nb_cols_to_use,
             output_path=output_path,
             search_space=self.search_space,

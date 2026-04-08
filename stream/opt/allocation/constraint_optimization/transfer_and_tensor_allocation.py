@@ -11,7 +11,6 @@ import yaml
 from gurobipy import GRB, quicksum
 
 from stream.cost_model.communication_manager import MulticastPathPlan
-from stream.cost_model.core_cost_lut import CoreCostLUT
 from stream.cost_model.tile_aware_latency import LatencyEstimate, TileAwareLatencyEstimator
 from stream.datatypes import LayerDim
 from stream.hardware.architecture.accelerator import Accelerator
@@ -69,7 +68,6 @@ class TransferAndTensorAllocator:
         ssis: dict[HasIterationSpace, SteadyStateIterationSpace],
         multiplicities: dict[ComputationNode, int],
         mapping: Mapping,
-        cost_lut: CoreCostLUT | None = None,
         *,
         big_m: int | None = None,
         gurobi_verbosity: int = 1,
@@ -93,7 +91,6 @@ class TransferAndTensorAllocator:
         self.latency_estimator = latency_estimator
         # Cache for per-candidate latency coefficients: {node: [(lat, jw_var_or_None), ...]}
         self._ssc_node_lat_coeffs: dict = {}
-        self.cost_lut = cost_lut
         self.output_path = output_path
         self.search_space = search_space
 
@@ -1289,9 +1286,14 @@ class TransferAndTensorAllocator:
                     self.model.addConstr(self.slot_latency[s] >= lat_est.latency_total, name=f"ssc_lat_{n.name}")
                     self._ssc_node_lat_coeffs[n] = [(lat_est.latency_total, None)]
             else:
-                # Scalar fallback: backward compat with cost_lut
-                runtimes = [self.cost_lut.get_cost(n, c).latency_total for c in self.cost_lut.get_cores(n)]
-                runtime = ceil(max(runtimes)) if runtimes else 0
+                # Scalar fallback: latency_estimator with node's own inter_core_tiling
+                if self.latency_estimator is not None:
+                    core = next(iter(self.mapping.get(n).resource_allocation[0]))
+                    inter_core_tiling = tuple(n.inter_core_tiling) if n.inter_core_tiling else ()
+                    lat_est = self.latency_estimator.estimate(n, core, inter_core_tiling)
+                    runtime = ceil(lat_est.latency_total)
+                else:
+                    runtime = 0
                 self.model.addConstr(self.slot_latency[s] >= runtime, name=f"ssc_lat_{n.name}")
                 self._ssc_node_lat_coeffs[n] = [(runtime, None)]
 
@@ -1441,8 +1443,14 @@ class TransferAndTensorAllocator:
             if n in self._ssc_node_lat_coeffs:
                 max_lat = max(lat for lat, _ in self._ssc_node_lat_coeffs[n])
             else:
-                runtimes = [self.cost_lut.get_cost(n, c).latency_total for c in self.cost_lut.get_cores(n)]
-                max_lat = ceil(max(runtimes)) if runtimes else 0
+                # latency_estimator fallback for nodes without tiled dims
+                if self.latency_estimator is not None:
+                    core = next(iter(self.mapping.get(n).resource_allocation[0]))
+                    inter_core_tiling = tuple(n.inter_core_tiling) if n.inter_core_tiling else ()
+                    lat_est = self.latency_estimator.estimate(n, core, inter_core_tiling)
+                    max_lat = ceil(lat_est.latency_total)
+                else:
+                    max_lat = 0
             slot_latency_ub = max(slot_latency_ub, max_lat)
 
         for tr in self.transfer_nodes:
