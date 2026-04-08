@@ -99,7 +99,11 @@ Plans:
   2. Per-candidate latency is derived from `ceil(kernel_size / (ops_per_cycle * utilization))` where kernel_size depends on tile selection
   3. The model remains a pure MILP after compute latency changes
   4. The regression test passes with a single-candidate degenerate input after compute latency changes
-**Plans**: TBD
+**Plans**: 3 plans
+Plans:
+- [ ] 06-01-PLAN.md — TileAwareLatencyEstimator + CO slot latency linearization
+- [ ] 06-02-PLAN.md — Pipeline wiring: SSS + CO allocation stage + CoreCostEstimation migration
+- [ ] 06-03-PLAN.md — Remove CoreCostLUT, migrate all remaining consumers
 
 ### Phase 7: Pipeline Integration + E2E Validation
 **Goal**: TilingGenerationStage is removed from the variable tile pipeline path (tile sizes are now CO-determined); a CLI entry point runs multi-candidate tile selection end-to-end on SwiGLU BIG BOY
@@ -125,5 +129,5 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6 -> 7
 | 3. Tile Selection Variables + Memory Constraints | 2/3 | In Progress|  |
 | 4. Variable SSIS + FIFO Constraints | 2/2 | Complete   | 2026-04-07 |
 | 5. Variable Transfer Latency | 1/1 | Complete   | 2026-04-08 |
-| 6. Variable Compute Latency | 0/? | Not started | - |
+| 6. Variable Compute Latency | 0/3 | Planning complete | - |
 | 7. Pipeline Integration + E2E Validation | 0/? | Not started | - |
