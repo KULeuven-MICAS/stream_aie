@@ -39,6 +39,7 @@ from stream.workload.steady_state.iteration_space import (
     Reuse,
     SteadyStateIterationSpace,
 )
+from stream.cost_model.tile_aware_latency import TileAwareLatencyEstimator
 from stream.opt.search_space import SearchSpace
 from stream.workload.utils import generate_steady_state_iteration_spaces, get_equivalent_dimension
 from stream.workload.workload import Workload
@@ -53,10 +54,11 @@ class SteadyStateScheduler:
         accelerator: "Accelerator",
         mapping: Mapping,
         fusion_splits: dict[LayerDim, int],
-        cost_lut: CoreCostLUT,
+        cost_lut: CoreCostLUT | None = None,
         nb_cols_to_use: int = 4,
         output_path: str = "",
         search_space: SearchSpace | None = None,
+        latency_estimator: TileAwareLatencyEstimator | None = None,
     ):
         """
         Initialize the SteadyStateScheduler with the allocation and accelerator.
@@ -69,6 +71,7 @@ class SteadyStateScheduler:
         self.mapping = mapping
         self.fusion_splits = fusion_splits
         self.cost_lut = cost_lut
+        self.latency_estimator = latency_estimator
         self.partitioned_nodes: dict[ComputationNode, list[SteadyStateComputation]] = {}
         self.constant_tensors: dict[int, InEdge | OutEdge] = {}
         self.ssw: Workload | None = None
@@ -100,8 +103,12 @@ class SteadyStateScheduler:
         self.ssw.visualize(os.path.join(self.output_path, "tiled_workload_with_transfers.png"))
         # Update the mapping for the new workload graph
         self.mapping = self.update_mapping()
-        # Update the cost lut for the new workload graph
-        self.cost_lut = self.update_cost_lut()
+        # Update the cost lut for the new workload graph (only if present)
+        if self.cost_lut is not None:
+            self.cost_lut = self.update_cost_lut()
+        # Reconstruct latency_estimator with updated workload/mapping after transfer graph build (Pitfall 3)
+        if self.latency_estimator is not None:
+            self.latency_estimator = TileAwareLatencyEstimator(self.ssw, self.mapping)
         # Update the steady state iteration spaces to include transfer nodes and tensors
         self.ssis = self.generate_ssis()
         # Calculate the number of iterations based on the steady state iteration spaces
@@ -123,6 +130,7 @@ class SteadyStateScheduler:
             nb_cols_to_use=self.nb_cols_to_use,
             output_path=self.output_path,
             search_space=self.search_space,
+            latency_estimator=self.latency_estimator,
         )
         (
             tensor_reuse_levels,
