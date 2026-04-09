@@ -94,6 +94,15 @@ class TransferAndTensorAllocator:
         self.output_path = output_path
         self.search_space = search_space
 
+        # Iteration scaling: base tile per search-space dim (from tile_options[0])
+        # Used in _slot_latency_constraints to scale per-candidate latency so that
+        # iterations * scaled_slot_latency == true_iterations * raw_slot_latency
+        if self.search_space is not None and not self.search_space.is_empty():
+            self._base_orig_dim_sizes = {d: self.search_space.get(d)[0].tile for d in self.search_space.dims()}
+        else:
+            self._base_orig_dim_sizes = {}
+        self._iter_scale_by_jw: dict = {}
+
         # tile selection vars (populated in __create_tile_selection_vars if search_space is set)
         self.w: dict[tuple[LayerDim, int], gp.Var] = {}
         self.tile_var: dict[LayerDim, gp.Var] = {}
@@ -1275,7 +1284,15 @@ class TransferAndTensorAllocator:
                                 current_tiling.append((dim, new_factor))
                         lat_est = self.latency_estimator.estimate(n, core, tuple(current_tiling))
                         jw = self._joint_binary_for_combo(per_dim_options, combo, base_name=f"jw_ssc_{n.name}")
-                        lat_coeffs.append((lat_est.latency_total, jw))
+                        # Iteration scaling per D-01/D-02: scale = prod(base_tile / candidate_tile)
+                        # so that iterations_fixed * scaled_lat == true_iterations * raw_lat
+                        scale = 1.0
+                        for (dim, _opts), opt in zip(per_dim_options, combo, strict=False):
+                            if dim in self._base_orig_dim_sizes:
+                                scale *= self._base_orig_dim_sizes[dim] / opt.tile
+                        scaled_lat = int(round(lat_est.latency_total * scale))
+                        lat_coeffs.append((scaled_lat, jw))
+                        self._iter_scale_by_jw[jw] = scale
                     expr = quicksum(lat * jw for lat, jw in lat_coeffs)
                     self.model.addConstr(self.slot_latency[s] >= expr, name=f"ssc_lat_{n.name}")
                     self._ssc_node_lat_coeffs[n] = lat_coeffs
