@@ -1292,7 +1292,7 @@ class TransferAndTensorAllocator:
                                 scale *= self._base_orig_dim_sizes[dim] / opt.tile
                         scaled_lat = int(round(lat_est.latency_total * scale))
                         lat_coeffs.append((scaled_lat, jw))
-                        self._iter_scale_by_jw[jw] = scale
+                        self._iter_scale_by_jw[id(jw)] = scale
                     expr = quicksum(lat * jw for lat, jw in lat_coeffs)
                     self.model.addConstr(self.slot_latency[s] >= expr, name=f"ssc_lat_{n.name}")
                     self._ssc_node_lat_coeffs[n] = lat_coeffs
