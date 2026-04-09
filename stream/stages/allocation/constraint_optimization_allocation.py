@@ -1,3 +1,4 @@
+import copy
 import logging
 import os
 from typing import TypeAlias
@@ -57,6 +58,13 @@ class ConstraintOptimizationAllocationStage(Stage):
 
     def run(self):
         logger.info("Start ConstraintOptimizationAllocationStage.")
+        # Preserve original untiled workload/mapping for post-solve TilingGeneration.
+        # Deep-copy the mapping because the scheduler mutates it in-place
+        # (adds transfer node entries during steady-state workload construction).
+        self.ctx.set(
+            orig_workload=self.workload,
+            orig_mapping=copy.deepcopy(self.mapping),
+        )
         workload, scheduler = self.find_best_tensor_transfer_allocation()
         mapping = scheduler.mapping
         self.ctx.set(

@@ -52,7 +52,15 @@ class TilingGenerationStage(Stage):
     def run(self):
         if self.selected_tiles is not None:
             # Post-solve mode (per D-01, D-07): tile sizes come from the CO solver.
-            # fusion_splits was pre-computed before the CO (by _FusionSplitsStage) and is in ctx.
+            # Use the original untiled workload (saved by CO stage) — the current
+            # self.workload is the steady-state workload with transfer nodes and
+            # renamed tensors, which with_modified_dimension_sizes cannot handle.
+            orig_workload = self.ctx.get("orig_workload")
+            orig_mapping = self.ctx.get("orig_mapping")
+            if orig_workload is not None:
+                self.workload = orig_workload
+                self.mapping = orig_mapping
+                self.unique_dims, self.dim_expressions = self.workload.unique_dimensions()
             self.fusion_splits = self.ctx.get("fusion_splits")
             self.tiled_sizes = self.substitute_loop_sizes_with_selected_tiles()
         else:

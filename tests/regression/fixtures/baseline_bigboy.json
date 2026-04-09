@@ -1,17 +1,17 @@
 {
-  "latency_total": 1030232714,
-  "latency_per_iteration": 14654,
-  "overlap": 6794,
+  "latency_total": 913578786,
+  "latency_per_iteration": 13916,
+  "overlap": 6946,
   "fire_counts": {
     "Transfer(input)": 64,
     "Transfer(input_1)": 8192,
     "Transfer(weights_1)": 2048,
     "Transfer(weights_1_1)": 8192,
     "Transfer(left)": 8192,
-    "Transfer(left_swished)": 512,
     "Transfer(weights_2)": 2048,
     "Transfer(weights_2_1)": 8192,
     "Transfer(right)": 8192,
+    "Transfer(left_swished)": 512,
     "Transfer(intermediate)": 8192,
     "Transfer(weights_3)": 2048,
     "Transfer(weights_3_1)": 8192,
@@ -37,19 +37,19 @@
       ]
     },
     "Transfer(input_1)__out0": {
-      "reuse_factor": 128,
+      "reuse_factor": 1,
       "loops": [
         {
           "dim": "z0",
           "size": 16,
           "relevant": true,
-          "reuse": "Reuse"
+          "reuse": "No Reuse"
         },
         {
           "dim": "z1",
           "size": 128,
           "relevant": false,
-          "reuse": "Reuse"
+          "reuse": "No Reuse"
         },
         {
           "dim": "z2",
@@ -60,19 +60,19 @@
       ]
     },
     "Transfer(input_1)__out1": {
-      "reuse_factor": 128,
+      "reuse_factor": 1,
       "loops": [
         {
           "dim": "z0",
           "size": 16,
           "relevant": true,
-          "reuse": "Reuse"
+          "reuse": "No Reuse"
         },
         {
           "dim": "z1",
           "size": 128,
           "relevant": false,
-          "reuse": "Reuse"
+          "reuse": "No Reuse"
         },
         {
           "dim": "z2",
@@ -106,7 +106,7 @@
           "dim": "z0",
           "size": 16,
           "relevant": true,
-          "reuse": "Reuse"
+          "reuse": "No Reuse"
         },
         {
           "dim": "z1",
@@ -145,23 +145,6 @@
         }
       ]
     },
-    "Transfer(left_swished)__out0": {
-      "reuse_factor": 1,
-      "loops": [
-        {
-          "dim": "z1",
-          "size": 128,
-          "relevant": true,
-          "reuse": "No Reuse"
-        },
-        {
-          "dim": "z2",
-          "size": 4,
-          "relevant": true,
-          "reuse": "No Reuse"
-        }
-      ]
-    },
     "Transfer(weights_2)__out0": {
       "reuse_factor": 1,
       "loops": [
@@ -186,7 +169,7 @@
           "dim": "z0",
           "size": 16,
           "relevant": true,
-          "reuse": "Reuse"
+          "reuse": "No Reuse"
         },
         {
           "dim": "z1",
@@ -211,6 +194,23 @@
           "relevant": false,
           "reuse": "Reuse"
         },
+        {
+          "dim": "z1",
+          "size": 128,
+          "relevant": true,
+          "reuse": "No Reuse"
+        },
+        {
+          "dim": "z2",
+          "size": 4,
+          "relevant": true,
+          "reuse": "No Reuse"
+        }
+      ]
+    },
+    "Transfer(left_swished)__out0": {
+      "reuse_factor": 1,
+      "loops": [
         {
           "dim": "z1",
           "size": 128,
@@ -266,30 +266,30 @@
       ]
     },
     "Transfer(weights_3_1)__out0": {
-      "reuse_factor": 4,
+      "reuse_factor": 1,
       "loops": [
         {
           "dim": "z3",
           "size": 16,
           "relevant": true,
-          "reuse": "Reuse"
+          "reuse": "No Reuse"
         },
         {
           "dim": "z1",
           "size": 128,
           "relevant": true,
-          "reuse": "Reuse"
+          "reuse": "No Reuse"
         },
         {
           "dim": "z2",
           "size": 4,
           "relevant": false,
-          "reuse": "Reuse"
+          "reuse": "No Reuse"
         }
       ]
     },
     "Transfer(output_1)__out0": {
-      "reuse_factor": 128,
+      "reuse_factor": 1,
       "loops": [
         {
           "dim": "z3",
@@ -301,7 +301,7 @@
           "dim": "z1",
           "size": 128,
           "relevant": false,
-          "reuse": "Reuse"
+          "reuse": "No Reuse"
         },
         {
           "dim": "z2",
@@ -318,16 +318,22 @@
           "dim": "z3",
           "size": 16,
           "relevant": true,
-          "reuse": "Reuse"
+          "reuse": "No Reuse"
         },
         {
           "dim": "z2",
           "size": 4,
           "relevant": true,
-          "reuse": "Reuse"
+          "reuse": "No Reuse"
         }
       ]
     }
+  },
+  "selected_tiles": {
+    "z0": 128,
+    "z3": 128,
+    "z2": 32,
+    "z1": 16
   },
   "config": {
     "seq_len": 256,

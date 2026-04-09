@@ -11,7 +11,7 @@ import yaml
 from gurobipy import GRB, quicksum
 
 from stream.cost_model.communication_manager import MulticastPathPlan
-from stream.cost_model.tile_aware_latency import LatencyEstimate, TileAwareLatencyEstimator
+from stream.cost_model.tile_aware_latency import TileAwareLatencyEstimator
 from stream.datatypes import LayerDim
 from stream.hardware.architecture.accelerator import Accelerator
 from stream.hardware.architecture.core import Core
@@ -1258,11 +1258,15 @@ class TransferAndTensorAllocator:
     def _slot_latency_constraints(self):
         for n in self.ssc_nodes:
             s = self.slot_of[n]
-            if self.search_space is not None and not self.search_space.is_empty() and self.latency_estimator is not None:
+            if (
+                self.search_space is not None
+                and not self.search_space.is_empty()
+                and self.latency_estimator is not None
+            ):
                 # Variable tile mode: build quicksum(lat[k] * jw[k]) per D-02
                 inter_core_tiling = self.workload.get_unique_dims_inter_core_tiling(n, self.mapping)
-                tiling_dims = {dim for dim, _ in inter_core_tiling}
-                tiled_dims = [d for d in self.search_space.dims() if d in tiling_dims]
+                node_dims = set(self.workload.get_dims(n))
+                tiled_dims = [d for d in self.search_space.dims() if d in node_dims]
                 if tiled_dims:
                     per_dim_options = [(dim, self.search_space.get(dim)) for dim in tiled_dims]
                     lat_coeffs: list[tuple[int, gp.Var]] = []
@@ -1459,15 +1463,14 @@ class TransferAndTensorAllocator:
         for n in self.ssc_nodes:
             if n in self._ssc_node_lat_coeffs:
                 max_lat = max(lat for lat, _ in self._ssc_node_lat_coeffs[n])
+            # latency_estimator fallback for nodes without tiled dims
+            elif self.latency_estimator is not None:
+                core = next(iter(self.mapping.get(n).resource_allocation[0]))
+                inter_core_tiling = tuple(n.inter_core_tiling) if n.inter_core_tiling else ()
+                lat_est = self.latency_estimator.estimate(n, core, inter_core_tiling)
+                max_lat = ceil(lat_est.latency_total)
             else:
-                # latency_estimator fallback for nodes without tiled dims
-                if self.latency_estimator is not None:
-                    core = next(iter(self.mapping.get(n).resource_allocation[0]))
-                    inter_core_tiling = tuple(n.inter_core_tiling) if n.inter_core_tiling else ()
-                    lat_est = self.latency_estimator.estimate(n, core, inter_core_tiling)
-                    max_lat = ceil(lat_est.latency_total)
-                else:
-                    max_lat = 0
+                max_lat = 0
             slot_latency_ub = max(slot_latency_ub, max_lat)
 
         for tr in self.transfer_nodes:
@@ -1807,11 +1810,13 @@ class TransferAndTensorAllocator:
         return w
 
     def _tiled_dims_for_tensor(self, tensor: Tensor, tr: TransferNode) -> list[LayerDim]:
-        """Return SearchSpace dims that affect tensor's size via inter-core tiling.
+        """Return SearchSpace dims that affect tensor's size.
 
-        A dim affects the tensor if it appears in the successor's inter_core_tiling.
-        Conservative: includes all search_space dims that appear in the
-        successor node's unique_dims_inter_core_tiling.
+        A dim affects the tensor if it appears in the successor node's
+        computation dimensions.  With the untiled-workload pipeline (Phase 7+),
+        tile candidates must be applied to ALL dimensions of the tensor, not
+        only those with spatial (inter-core) tiling.  Otherwise dimensions
+        without spatial splits remain at the full untiled workload size.
         """
         if self.search_space is None or self.search_space.is_empty():
             return []
@@ -1820,9 +1825,8 @@ class TransferAndTensorAllocator:
         succ_node = succ_list[succ_idx]
         if isinstance(succ_node, InEdge | OutEdge):
             return []
-        succ_tiling = self.workload.get_unique_dims_inter_core_tiling(succ_node, self.mapping)
-        tiling_dims = {d for d, _ in succ_tiling}
-        return [d for d in self.search_space.dims() if d in tiling_dims]
+        succ_dims = set(self.workload.get_dims(succ_node))
+        return [d for d in self.search_space.dims() if d in succ_dims]
 
     def _joint_candidates_for_tensor(self, tensor: Tensor, tr: TransferNode) -> list[tuple[int, gp.Var]]:
         """Enumerate joint candidate combinations for a tensor's tiled dimensions.
@@ -1990,24 +1994,32 @@ class TransferAndTensorAllocator:
 
                 # Big-M linearization: lc_s = z_stop[s] * expr_s
                 lc = self.model.addVar(
-                    vtype=GRB.CONTINUOUS, lb=0, ub=M_s,
+                    vtype=GRB.CONTINUOUS,
+                    lb=0,
+                    ub=M_s,
                     name=f"lat_lc_{self._safe_name(str(tr.name))}_L{s}",
                 )
                 self.model.addConstr(lc <= expr_s, name=f"lat_lc_ub_expr_{self._safe_name(str(tr.name))}_L{s}")
                 self.model.addConstr(lc <= M_s * z, name=f"lat_lc_ub_m_{self._safe_name(str(tr.name))}_L{s}")
-                self.model.addConstr(lc >= expr_s - M_s * (1 - z), name=f"lat_lc_lb_{self._safe_name(str(tr.name))}_L{s}")
+                self.model.addConstr(
+                    lc >= expr_s - M_s * (1 - z), name=f"lat_lc_lb_{self._safe_name(str(tr.name))}_L{s}"
+                )
                 lc_parts.append(lc)
                 M_total += M_s
 
             # lat_sum = sum of all stop-level contributions
             if lc_parts:
                 lat_sum = self.model.addVar(
-                    vtype=GRB.CONTINUOUS, lb=0, ub=M_total,
+                    vtype=GRB.CONTINUOUS,
+                    lb=0,
+                    ub=M_total,
                     name=f"lat_sum_{self._safe_name(str(tr.name))}",
                 )
                 self.model.addConstr(lat_sum == quicksum(lc_parts), name=f"lat_sum_def_{self._safe_name(str(tr.name))}")
             else:
-                lat_sum = self.model.addVar(vtype=GRB.CONTINUOUS, lb=0, ub=0, name=f"lat_sum_{self._safe_name(str(tr.name))}")
+                lat_sum = self.model.addVar(
+                    vtype=GRB.CONTINUOUS, lb=0, ub=0, name=f"lat_sum_{self._safe_name(str(tr.name))}"
+                )
 
             # Gate by path choice y: active_latency = y * lat_sum
             active_latency = self._add_binary_scaled_continuous(
@@ -2047,7 +2059,9 @@ class TransferAndTensorAllocator:
                 M_s = amort
 
                 lc = self.model.addVar(
-                    vtype=GRB.CONTINUOUS, lb=0, ub=M_s,
+                    vtype=GRB.CONTINUOUS,
+                    lb=0,
+                    ub=M_s,
                     name=f"lat_lc_{self._safe_name(str(tr.name))}_L{s}",
                 )
                 self.model.addConstr(lc <= amort * z, name=f"lat_lc_ub_m_{self._safe_name(str(tr.name))}_L{s}")
@@ -2058,12 +2072,16 @@ class TransferAndTensorAllocator:
 
             if lc_parts:
                 lat_sum = self.model.addVar(
-                    vtype=GRB.CONTINUOUS, lb=0, ub=M_total,
+                    vtype=GRB.CONTINUOUS,
+                    lb=0,
+                    ub=M_total,
                     name=f"lat_sum_{self._safe_name(str(tr.name))}",
                 )
                 self.model.addConstr(lat_sum == quicksum(lc_parts), name=f"lat_sum_def_{self._safe_name(str(tr.name))}")
             else:
-                lat_sum = self.model.addVar(vtype=GRB.CONTINUOUS, lb=0, ub=0, name=f"lat_sum_{self._safe_name(str(tr.name))}")
+                lat_sum = self.model.addVar(
+                    vtype=GRB.CONTINUOUS, lb=0, ub=0, name=f"lat_sum_{self._safe_name(str(tr.name))}"
+                )
 
             active_latency = self._add_binary_scaled_continuous(
                 binary_var=y,

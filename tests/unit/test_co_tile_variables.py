@@ -3,6 +3,7 @@
 Tests w[dim,k] binary variables, tile_var[dim] INTEGER variables, one-hot
 constraints, and joint candidate enumeration methods (D-01/D-02/D-03/D-04).
 """
+
 from __future__ import annotations
 
 import types
@@ -14,7 +15,6 @@ from gurobipy import GRB
 
 from stream.datatypes import LayerDim
 from stream.opt.search_space import SearchSpace, TileSizeOption
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -58,21 +58,11 @@ def _make_allocator_stub(model: gp.Model, search_space: SearchSpace | None = Non
     stub._TransferAndTensorAllocator__create_tile_selection_vars = (
         TransferAndTensorAllocator._TransferAndTensorAllocator__create_tile_selection_vars.__get__(stub)
     )
-    stub._tiled_dims_for_tensor = (
-        TransferAndTensorAllocator._tiled_dims_for_tensor.__get__(stub)
-    )
-    stub._joint_candidates_for_tensor = (
-        TransferAndTensorAllocator._joint_candidates_for_tensor.__get__(stub)
-    )
-    stub._joint_binary_for_combo = (
-        TransferAndTensorAllocator._joint_binary_for_combo.__get__(stub)
-    )
-    stub._add_binary_product = (
-        TransferAndTensorAllocator._add_binary_product.__get__(stub)
-    )
-    stub._safe_name = (
-        TransferAndTensorAllocator._safe_name.__get__(stub)
-    )
+    stub._tiled_dims_for_tensor = TransferAndTensorAllocator._tiled_dims_for_tensor.__get__(stub)
+    stub._joint_candidates_for_tensor = TransferAndTensorAllocator._joint_candidates_for_tensor.__get__(stub)
+    stub._joint_binary_for_combo = TransferAndTensorAllocator._joint_binary_for_combo.__get__(stub)
+    stub._add_binary_product = TransferAndTensorAllocator._add_binary_product.__get__(stub)
+    stub._safe_name = TransferAndTensorAllocator._safe_name.__get__(stub)
     # Phase 7: methods now access _orig_workload/_orig_mapping for stable dim resolution.
     # In test stubs, orig == current (no SSW translation needed).
     stub._orig_workload = MagicMock()
@@ -265,14 +255,11 @@ def _make_stub_for_joint_candidates(
     - stub.workload with mocked methods
     - stub.mapping (MagicMock)
     """
-    from stream.workload.workload import InEdge, OutEdge
 
     ss = _build_search_space(candidates_per_dim)
     stub = _make_allocator_stub(model, ss)
     stub._TransferAndTensorAllocator__create_tile_selection_vars()
     model.update()
-
-    tiled_dims = [_dim(p) for p in tiled_dims_positions]
 
     # Mock workload
     workload = MagicMock()
@@ -283,12 +270,14 @@ def _make_stub_for_joint_candidates(
     succ_node = MagicMock()
     succ_node.__class__ = MagicMock  # not InEdge/OutEdge
     # Make isinstance checks work: succ_node is NOT an InEdge or OutEdge
-    from unittest.mock import patch
     workload.successors.return_value = [succ_node]
 
     # get_unique_dims_inter_core_tiling returns tiling for tiled dims
     base_tiling = tuple((_dim(p), 4) for p in tiled_dims_positions)
     workload.get_unique_dims_inter_core_tiling.return_value = base_tiling
+
+    # get_dims returns the tiled dims (used by _tiled_dims_for_tensor)
+    workload.get_dims.return_value = [_dim(p) for p in tiled_dims_positions]
 
     # get_dimension_size returns 256 for all dims
     workload.get_dimension_size.return_value = 256
@@ -301,9 +290,7 @@ def _make_stub_for_joint_candidates(
 
 def test_joint_candidates_single_dim_returns_pairs(model):
     """For 1-dim SearchSpace, returns one (size, var) pair per candidate."""
-    stub, ss, succ_node = _make_stub_for_joint_candidates(
-        model, {0: [16, 32]}, [0]
-    )
+    stub, ss, succ_node = _make_stub_for_joint_candidates(model, {0: [16, 32]}, [0])
     tensor = MagicMock()
     tensor.size_bits.return_value = 1024
     tr = MagicMock()
@@ -320,9 +307,7 @@ def test_joint_candidates_single_dim_returns_pairs(model):
 
 def test_joint_candidates_populates_tensor_max_size(model):
     """_joint_candidates_for_tensor sets _tensor_max_size[tensor] as side-effect."""
-    stub, ss, succ_node = _make_stub_for_joint_candidates(
-        model, {0: [16, 32]}, [0]
-    )
+    stub, ss, succ_node = _make_stub_for_joint_candidates(model, {0: [16, 32]}, [0])
     tensor = MagicMock()
     tensor.size_bits.return_value = 2048
     tr = MagicMock()
@@ -335,9 +320,7 @@ def test_joint_candidates_populates_tensor_max_size(model):
 
 def test_joint_candidates_caches_result(model):
     """Calling _joint_candidates_for_tensor twice returns same list (cached)."""
-    stub, ss, succ_node = _make_stub_for_joint_candidates(
-        model, {0: [16, 32]}, [0]
-    )
+    stub, ss, succ_node = _make_stub_for_joint_candidates(model, {0: [16, 32]}, [0])
     tensor = MagicMock()
     tensor.size_bits.return_value = 512
     tr = MagicMock()
@@ -350,9 +333,7 @@ def test_joint_candidates_caches_result(model):
 
 def test_single_candidate_degenerate(model):
     """With 1 candidate per dim, exactly 1 joint combination exists (Pitfall 5 regression)."""
-    stub, ss, succ_node = _make_stub_for_joint_candidates(
-        model, {0: [16], 1: [32]}, [0, 1]
-    )
+    stub, ss, succ_node = _make_stub_for_joint_candidates(model, {0: [16], 1: [32]}, [0, 1])
     tensor = MagicMock()
     tensor.size_bits.return_value = 512
     tr = MagicMock()
@@ -365,7 +346,6 @@ def test_single_candidate_degenerate(model):
 
 def test_joint_candidates_no_tiled_dims_returns_empty(model):
     """When no SearchSpace dims appear in the successor's tiling, returns empty list."""
-    from stream.workload.workload import InEdge, OutEdge
 
     ss = _build_search_space({0: [16, 32]})
     stub = _make_allocator_stub(model, ss)
@@ -413,8 +393,6 @@ def _make_mem_constraint_stub(
     Pre-wires a single transfer node, single output tensor, and single core.
     joint_candidates overrides _joint_candidates_for_tensor when provided.
     """
-    from collections import defaultdict
-    from math import ceil
 
     from stream.opt.allocation.constraint_optimization.transfer_and_tensor_allocation import (
         TransferAndTensorAllocator,
@@ -453,6 +431,7 @@ def _make_mem_constraint_stub(
 
     # Build a Core mock using spec=Core so isinstance(core, Core) passes
     from stream.hardware.architecture.core import Core
+
     core = MagicMock(spec=Core)
     core.id = 42  # needed by _resource_key(core) -> f"Core {res.id}"
     core.get_memory_capacity.return_value = 2**30  # large cap, no infeasibility
@@ -460,6 +439,7 @@ def _make_mem_constraint_stub(
 
     # Build a Tensor mock
     from stream.workload.workload import Tensor
+
     tensor = MagicMock(spec=Tensor)
     tensor.name = "test_tensor"
     tensor.size_bits.return_value = tensor_size
@@ -516,9 +496,7 @@ def _make_mem_constraint_stub(
             stub._tensor_max_size[tensor] = max(sz for sz, _ in joint_candidates)
 
     # Bind _memory_capacity_constraints
-    stub._memory_capacity_constraints = (
-        TransferAndTensorAllocator._memory_capacity_constraints.__get__(stub)
-    )
+    stub._memory_capacity_constraints = TransferAndTensorAllocator._memory_capacity_constraints.__get__(stub)
 
     stub.mapping = MagicMock()
 
@@ -665,9 +643,9 @@ def _build_ssis_stub(dim_sizes_relevancies: list[tuple, ...]):
         IterationVariable,
         IterationVariableType,
         LoopEffect,
-        Reuse,
         SteadyStateIterationSpace,
     )
+
     variables = []
     for dim, size, relevant in dim_sizes_relevancies:
         effect = LoopEffect.VARYING if relevant else LoopEffect.INVARIANT
@@ -705,13 +683,13 @@ def _make_fire_helpers_stub(
 
     # Build transfer node mocks
     trs = []
-    for i, (ssis, tensors) in enumerate(zip(ssis_per_tr, tensors_per_tr)):
+    for i, (ssis, tensors) in enumerate(zip(ssis_per_tr, tensors_per_tr, strict=False)):
         tr = MagicMock()
         tr.name = f"tr_{i}"
         tr.tensors = tensors
         trs.append(tr)
     stub.transfer_nodes = tuple(trs)
-    stub.ssis = {tr: ssis for tr, ssis in zip(trs, ssis_per_tr)}
+    stub.ssis = {tr: ssis for tr, ssis in zip(trs, ssis_per_tr, strict=False)}
 
     # Fire helpers state
     stub.reuse_levels = {}
@@ -721,24 +699,12 @@ def _make_fire_helpers_stub(
     stub._ssis_max_coefficients = {}
 
     # Bind all required methods
-    stub._ssis_tiled_dims_for_transfer = (
-        TransferAndTensorAllocator._ssis_tiled_dims_for_transfer.__get__(stub)
-    )
-    stub._ssis_coefficients_for_transfer = (
-        TransferAndTensorAllocator._ssis_coefficients_for_transfer.__get__(stub)
-    )
-    stub._joint_binary_for_combo = (
-        TransferAndTensorAllocator._joint_binary_for_combo.__get__(stub)
-    )
-    stub._add_binary_product = (
-        TransferAndTensorAllocator._add_binary_product.__get__(stub)
-    )
-    stub._safe_name = (
-        TransferAndTensorAllocator._safe_name.__get__(stub)
-    )
-    stub._init_transfer_fire_helpers = (
-        TransferAndTensorAllocator._init_transfer_fire_helpers.__get__(stub)
-    )
+    stub._ssis_tiled_dims_for_transfer = TransferAndTensorAllocator._ssis_tiled_dims_for_transfer.__get__(stub)
+    stub._ssis_coefficients_for_transfer = TransferAndTensorAllocator._ssis_coefficients_for_transfer.__get__(stub)
+    stub._joint_binary_for_combo = TransferAndTensorAllocator._joint_binary_for_combo.__get__(stub)
+    stub._add_binary_product = TransferAndTensorAllocator._add_binary_product.__get__(stub)
+    stub._safe_name = TransferAndTensorAllocator._safe_name.__get__(stub)
+    stub._init_transfer_fire_helpers = TransferAndTensorAllocator._init_transfer_fire_helpers.__get__(stub)
     stub._classify_transfer_nodes_for_firing_optimization = (
         TransferAndTensorAllocator._classify_transfer_nodes_for_firing_optimization.__get__(stub)
     )
@@ -777,9 +743,7 @@ def test_ssis_tiled_dims_for_transfer_no_search_space(model):
     stub.search_space = None
 
     # Bind method
-    stub._ssis_tiled_dims_for_transfer = (
-        TransferAndTensorAllocator._ssis_tiled_dims_for_transfer.__get__(stub)
-    )
+    stub._ssis_tiled_dims_for_transfer = TransferAndTensorAllocator._ssis_tiled_dims_for_transfer.__get__(stub)
 
     tr = MagicMock()
     result = stub._ssis_tiled_dims_for_transfer(tr)
@@ -788,14 +752,14 @@ def test_ssis_tiled_dims_for_transfer_no_search_space(model):
 
 def test_ssis_tiled_dims_for_transfer_intersection(model):
     """Returns only dims present in both search_space and SSIS temporal dims."""
+    from stream.opt.allocation.constraint_optimization.transfer_and_tensor_allocation import (
+        TransferAndTensorAllocator,
+    )
     from stream.workload.steady_state.iteration_space import (
         IterationVariable,
         IterationVariableType,
         LoopEffect,
         SteadyStateIterationSpace,
-    )
-    from stream.opt.allocation.constraint_optimization.transfer_and_tensor_allocation import (
-        TransferAndTensorAllocator,
     )
 
     d0 = _dim(0)
@@ -808,16 +772,16 @@ def test_ssis_tiled_dims_for_transfer_intersection(model):
     stub.search_space = ss
 
     # SSIS with d0 and d1 but NOT d99
-    ssis = SteadyStateIterationSpace([
-        IterationVariable(d0, 16, LoopEffect.VARYING, IterationVariableType.TEMPORAL),
-        IterationVariable(d1, 8, LoopEffect.VARYING, IterationVariableType.TEMPORAL),
-    ])
+    ssis = SteadyStateIterationSpace(
+        [
+            IterationVariable(d0, 16, LoopEffect.VARYING, IterationVariableType.TEMPORAL),
+            IterationVariable(d1, 8, LoopEffect.VARYING, IterationVariableType.TEMPORAL),
+        ]
+    )
     tr = MagicMock()
     stub.ssis = {tr: ssis}
 
-    stub._ssis_tiled_dims_for_transfer = (
-        TransferAndTensorAllocator._ssis_tiled_dims_for_transfer.__get__(stub)
-    )
+    stub._ssis_tiled_dims_for_transfer = TransferAndTensorAllocator._ssis_tiled_dims_for_transfer.__get__(stub)
     result = stub._ssis_tiled_dims_for_transfer(tr)
     # Only d0 is in both search_space (pos=0) and SSIS temporal dims
     assert d0 in result
@@ -887,9 +851,7 @@ def test_init_fire_helpers_variable_tile_coefficients(model):
     stub._TransferAndTensorAllocator__create_tile_selection_vars = (
         TransferAndTensorAllocator._TransferAndTensorAllocator__create_tile_selection_vars.__get__(stub)
     )
-    stub._tiled_dims_for_tensor = (
-        TransferAndTensorAllocator._tiled_dims_for_tensor.__get__(stub)
-    )
+    stub._tiled_dims_for_tensor = TransferAndTensorAllocator._tiled_dims_for_tensor.__get__(stub)
     stub._TransferAndTensorAllocator__create_tile_selection_vars()
     model.update()
 
@@ -929,9 +891,7 @@ def test_init_fire_helpers_degenerate_single_candidate(model):
     stub._TransferAndTensorAllocator__create_tile_selection_vars = (
         TransferAndTensorAllocator._TransferAndTensorAllocator__create_tile_selection_vars.__get__(stub)
     )
-    stub._tiled_dims_for_tensor = (
-        TransferAndTensorAllocator._tiled_dims_for_tensor.__get__(stub)
-    )
+    stub._tiled_dims_for_tensor = TransferAndTensorAllocator._tiled_dims_for_tensor.__get__(stub)
     stub._TransferAndTensorAllocator__create_tile_selection_vars()
     model.update()
 
@@ -953,6 +913,7 @@ def test_ensure_same_ssis_not_called_at_init():
     Structural test: the __init__ source must not invoke _ensure_same_ssis_for_all_transfers.
     """
     import inspect
+
     from stream.opt.allocation.constraint_optimization.transfer_and_tensor_allocation import (
         TransferAndTensorAllocator,
     )
@@ -1018,12 +979,8 @@ def _make_fire_rate_stub(model: gp.Model, n_stops: int = 1):
     # Bind constraint methods
     stub.fires = {}
     stub.reuse_factors = {}
-    stub._transfer_fire_rate_constraints = (
-        TransferAndTensorAllocator._transfer_fire_rate_constraints.__get__(stub)
-    )
-    stub._reuse_factor_rate_constraints = (
-        TransferAndTensorAllocator._reuse_factor_rate_constraints.__get__(stub)
-    )
+    stub._transfer_fire_rate_constraints = TransferAndTensorAllocator._transfer_fire_rate_constraints.__get__(stub)
+    stub._reuse_factor_rate_constraints = TransferAndTensorAllocator._reuse_factor_rate_constraints.__get__(stub)
     return stub, tr, tensor
 
 
@@ -1066,9 +1023,7 @@ def _make_fire_rate_stub_variable(model: gp.Model, n_candidates: int = 2, n_stop
     stub.reuse_levels = {}
     stub._ssis_max_coefficients = {}
     for s in range(-1, n_stops):
-        stub.reuse_levels[(tensor, s)] = [
-            ((k + 1) * 4, (k + 1) * 2, jw_vars[k]) for k in range(n_candidates)
-        ]
+        stub.reuse_levels[(tensor, s)] = [((k + 1) * 4, (k + 1) * 2, jw_vars[k]) for k in range(n_candidates)]
         max_fires = n_candidates * 4
         max_sf = n_candidates * 2
         stub._ssis_max_coefficients[(tensor, s)] = {
@@ -1079,12 +1034,8 @@ def _make_fire_rate_stub_variable(model: gp.Model, n_candidates: int = 2, n_stop
     # Bind constraint methods
     stub.fires = {}
     stub.reuse_factors = {}
-    stub._transfer_fire_rate_constraints = (
-        TransferAndTensorAllocator._transfer_fire_rate_constraints.__get__(stub)
-    )
-    stub._reuse_factor_rate_constraints = (
-        TransferAndTensorAllocator._reuse_factor_rate_constraints.__get__(stub)
-    )
+    stub._transfer_fire_rate_constraints = TransferAndTensorAllocator._transfer_fire_rate_constraints.__get__(stub)
+    stub._reuse_factor_rate_constraints = TransferAndTensorAllocator._reuse_factor_rate_constraints.__get__(stub)
     return stub, tr, tensor, jw_vars
 
 
@@ -1100,9 +1051,7 @@ def test_fire_rate_scalar_creates_fires_def_constraint(model):
     model.update()
 
     constr_names = {c.ConstrName for c in model.getConstrs()}
-    assert f"fires_def_{tr.name}" in constr_names, (
-        f"Expected fires_def_{tr.name}, got: {constr_names}"
-    )
+    assert f"fires_def_{tr.name}" in constr_names, f"Expected fires_def_{tr.name}, got: {constr_names}"
 
 
 def test_fire_rate_scalar_no_lc_vars(model):
@@ -1155,9 +1104,7 @@ def test_reuse_factor_scalar_creates_reuse_factor_def_constraint(model):
     model.update()
 
     constr_names = {c.ConstrName for c in model.getConstrs()}
-    assert f"reuse_factor_def_{tr.name}" in constr_names, (
-        f"Expected reuse_factor_def_{tr.name}, got: {constr_names}"
-    )
+    assert f"reuse_factor_def_{tr.name}" in constr_names, f"Expected reuse_factor_def_{tr.name}, got: {constr_names}"
 
 
 def test_reuse_factor_scalar_no_lc_vars(model):
@@ -1309,12 +1256,8 @@ def _make_fifo_bd_stub(
     # Bind constraint methods
     stub.object_fifo_depth = defaultdict(gp.LinExpr)
     stub.bd_depth = defaultdict(gp.LinExpr)
-    stub._object_fifo_depth_constraints = (
-        TransferAndTensorAllocator._object_fifo_depth_constraints.__get__(stub)
-    )
-    stub._buffer_descriptor_constraints = (
-        TransferAndTensorAllocator._buffer_descriptor_constraints.__get__(stub)
-    )
+    stub._object_fifo_depth_constraints = TransferAndTensorAllocator._object_fifo_depth_constraints.__get__(stub)
+    stub._buffer_descriptor_constraints = TransferAndTensorAllocator._buffer_descriptor_constraints.__get__(stub)
     return stub, tr, tensor, core
 
 
@@ -1363,8 +1306,9 @@ def test_fifo_depth_variable_creates_bigm_constraints(model):
 
 def test_fifo_depth_double_buffering_increases_m(model):
     """force_double_buffering=True adds +1 to M bound, reflected in lc var upper bound."""
-    stub_no_db, _, _, _ = _make_fifo_bd_stub(model, n_stops=1, n_candidates=2, tiles_needed_scalar=2,
-                                              force_double_buffering=False)
+    stub_no_db, _, _, _ = _make_fifo_bd_stub(
+        model, n_stops=1, n_candidates=2, tiles_needed_scalar=2, force_double_buffering=False
+    )
     stub_no_db._object_fifo_depth_constraints()
     model.update()
     lc_no_db = [v for v in model.getVars() if v.VarName.startswith("fifo_lc_")]
@@ -1372,17 +1316,16 @@ def test_fifo_depth_double_buffering_increases_m(model):
 
     model2 = gp.Model()
     model2.setParam("OutputFlag", 0)
-    stub_db, _, _, _ = _make_fifo_bd_stub(model2, n_stops=1, n_candidates=2, tiles_needed_scalar=2,
-                                           force_double_buffering=True)
+    stub_db, _, _, _ = _make_fifo_bd_stub(
+        model2, n_stops=1, n_candidates=2, tiles_needed_scalar=2, force_double_buffering=True
+    )
     stub_db._object_fifo_depth_constraints()
     model2.update()
     lc_db = [v for v in model2.getVars() if v.VarName.startswith("fifo_lc_")]
     ub_db = max(v.UB for v in lc_db) if lc_db else None
 
     assert ub_no_db is not None and ub_db is not None
-    assert ub_db == ub_no_db + 1, (
-        f"Expected double-buffering M = no-db M + 1, got {ub_db} vs {ub_no_db}"
-    )
+    assert ub_db == ub_no_db + 1, f"Expected double-buffering M = no-db M + 1, got {ub_db} vs {ub_no_db}"
 
 
 # ---------------------------------------------------------------------------
@@ -1392,9 +1335,7 @@ def test_fifo_depth_double_buffering_increases_m(model):
 
 def test_bd_depth_scalar_no_lc_vars(model):
     """With scalar bds_needed_levels, no bd_lc_* auxiliary variables are created."""
-    stub, tr, tensor, core = _make_fifo_bd_stub(
-        model, n_stops=1, bds_needed_scalar=3, core_type="memory"
-    )
+    stub, tr, tensor, core = _make_fifo_bd_stub(model, n_stops=1, bds_needed_scalar=3, core_type="memory")
     stub._buffer_descriptor_constraints()
     model.update()
 
@@ -1405,9 +1346,7 @@ def test_bd_depth_scalar_no_lc_vars(model):
 
 def test_bd_depth_variable_creates_lc_vars(model):
     """With candidate-indexed bds_needed_levels (2 candidates), bd_lc_ vars are created."""
-    stub, tr, tensor, core = _make_fifo_bd_stub(
-        model, n_stops=1, n_candidates=2, core_type="memory"
-    )
+    stub, tr, tensor, core = _make_fifo_bd_stub(model, n_stops=1, n_candidates=2, core_type="memory")
     stub._buffer_descriptor_constraints()
     model.update()
 
@@ -1418,9 +1357,7 @@ def test_bd_depth_variable_creates_lc_vars(model):
 
 def test_bd_depth_variable_creates_bigm_constraints(model):
     """With candidate-indexed bds_needed_levels, bd_lc_ big-M constraints exist."""
-    stub, tr, tensor, core = _make_fifo_bd_stub(
-        model, n_stops=1, n_candidates=2, core_type="memory"
-    )
+    stub, tr, tensor, core = _make_fifo_bd_stub(model, n_stops=1, n_candidates=2, core_type="memory")
     stub._buffer_descriptor_constraints()
     model.update()
 
@@ -1470,6 +1407,7 @@ def test_degenerate_ssis_single_candidate_feasible(model):
     stub.model = model
 
     from stream.hardware.architecture.core import Core
+
     tensor = MagicMock(spec=Tensor)
     tensor.name = "deg_tensor"
     tr = MagicMock()
@@ -1513,6 +1451,7 @@ def test_degenerate_ssis_single_candidate_feasible(model):
     stub._candidate_cores_for_tensor = lambda t: {core}
 
     from collections import defaultdict
+
     stub.fires = {}
     stub.reuse_factors = {}
     stub.object_fifo_depth = defaultdict(gp.LinExpr)
@@ -1521,18 +1460,10 @@ def test_degenerate_ssis_single_candidate_feasible(model):
     # Bind all methods
     stub._add_binary_product = TransferAndTensorAllocator._add_binary_product.__get__(stub)
     stub._safe_name = TransferAndTensorAllocator._safe_name.__get__(stub)
-    stub._transfer_fire_rate_constraints = (
-        TransferAndTensorAllocator._transfer_fire_rate_constraints.__get__(stub)
-    )
-    stub._reuse_factor_rate_constraints = (
-        TransferAndTensorAllocator._reuse_factor_rate_constraints.__get__(stub)
-    )
-    stub._object_fifo_depth_constraints = (
-        TransferAndTensorAllocator._object_fifo_depth_constraints.__get__(stub)
-    )
-    stub._buffer_descriptor_constraints = (
-        TransferAndTensorAllocator._buffer_descriptor_constraints.__get__(stub)
-    )
+    stub._transfer_fire_rate_constraints = TransferAndTensorAllocator._transfer_fire_rate_constraints.__get__(stub)
+    stub._reuse_factor_rate_constraints = TransferAndTensorAllocator._reuse_factor_rate_constraints.__get__(stub)
+    stub._object_fifo_depth_constraints = TransferAndTensorAllocator._object_fifo_depth_constraints.__get__(stub)
+    stub._buffer_descriptor_constraints = TransferAndTensorAllocator._buffer_descriptor_constraints.__get__(stub)
 
     # Execute all constraint methods
     stub._transfer_fire_rate_constraints()
@@ -1598,9 +1529,6 @@ def test_active_transfer_latency_variable_mode(model):
     """
     from math import ceil
 
-    from stream.opt.allocation.constraint_optimization.transfer_and_tensor_allocation import (
-        TransferAndTensorAllocator,
-    )
     from stream.workload.workload import Tensor
 
     stub = _make_latency_stub(model)
@@ -1780,12 +1708,8 @@ def test_active_transfer_latency_scalar_fallback(model):
     model.optimize()
 
     assert model.Status == GRB.OPTIMAL, f"Model infeasible, status={model.Status}"
-    assert abs(active_latency.X - 4.0) < 1e-6, (
-        f"Expected latency=4.0, got {active_latency.X}"
-    )
-    assert model.NumGenConstrs == 0, (
-        f"Expected 0 general constraints (NL), got {model.NumGenConstrs}"
-    )
+    assert abs(active_latency.X - 4.0) < 1e-6, f"Expected latency=4.0, got {active_latency.X}"
+    assert model.NumGenConstrs == 0, f"Expected 0 general constraints (NL), got {model.NumGenConstrs}"
 
 
 def test_no_genconstr_nl_in_model(model):
@@ -1835,9 +1759,7 @@ def test_no_genconstr_nl_in_model(model):
 
     model.update()
 
-    assert model.NumGenConstrs == 0, (
-        f"Expected 0 general constraints (NL), got {model.NumGenConstrs}"
-    )
+    assert model.NumGenConstrs == 0, f"Expected 0 general constraints (NL), got {model.NumGenConstrs}"
 
 
 # ---------------------------------------------------------------------------
@@ -1858,7 +1780,6 @@ def _make_slot_latency_stub(model: gp.Model, search_space, latency_estimate_per_
       - _ssc_node_lat_coeffs = {}
     """
     from stream.cost_model.tile_aware_latency import LatencyEstimate
-    from stream.datatypes import LayerDim
     from stream.opt.allocation.constraint_optimization.transfer_and_tensor_allocation import (
         TransferAndTensorAllocator,
     )
@@ -1886,6 +1807,7 @@ def _make_slot_latency_stub(model: gp.Model, search_space, latency_estimate_per_
 
     # Mock core
     from stream.hardware.architecture.core import Core
+
     core = MagicMock(spec=Core)
     core.id = 1
 
@@ -1903,11 +1825,13 @@ def _make_slot_latency_stub(model: gp.Model, search_space, latency_estimate_per_
     d0 = _dim(0)
     base_tiling = ((d0, 4),)
     workload.get_unique_dims_inter_core_tiling.return_value = base_tiling
+    # get_dims returns the node's computation dimensions (used by _tiled_dims_for_tensor
+    # and _slot_latency_constraints to find which search_space dims affect the node)
+    workload.get_dims.return_value = [d0]
     workload.get_dimension_size.return_value = 64  # workload_size for dim(0)
     stub.workload = workload
 
     # Mock latency_estimator
-    from stream.cost_model.tile_aware_latency import LatencyEstimate
     latency_estimator = MagicMock()
     if latency_estimate_per_combo is None:
         # Default: returns latency 10 per candidate
@@ -1917,12 +1841,8 @@ def _make_slot_latency_stub(model: gp.Model, search_space, latency_estimate_per_
     stub.latency_estimator = latency_estimator
 
     # Bind the methods under test
-    stub._slot_latency_constraints = (
-        TransferAndTensorAllocator._slot_latency_constraints.__get__(stub)
-    )
-    stub._create_idle_latency_vars = (
-        TransferAndTensorAllocator._create_idle_latency_vars.__get__(stub)
-    )
+    stub._slot_latency_constraints = TransferAndTensorAllocator._slot_latency_constraints.__get__(stub)
+    stub._create_idle_latency_vars = TransferAndTensorAllocator._create_idle_latency_vars.__get__(stub)
     stub._add_binary_product = TransferAndTensorAllocator._add_binary_product.__get__(stub)
     stub._safe_name = TransferAndTensorAllocator._safe_name.__get__(stub)
     stub._joint_binary_for_combo = TransferAndTensorAllocator._joint_binary_for_combo.__get__(stub)
@@ -1945,7 +1865,7 @@ def _make_slot_latency_stub(model: gp.Model, search_space, latency_estimate_per_
     return stub, mock_node, slot_lat_var, core
 
 
-def _build_ss_for_slot(candidates: list[int]) -> "SearchSpace":
+def _build_ss_for_slot(candidates: list[int]) -> SearchSpace:
     """Build a SearchSpace with dim(0) having the given candidates."""
     return _build_search_space({0: candidates})
 
@@ -1963,10 +1883,10 @@ def test_slot_latency_variable_mode(model):
     """
     ss = _build_ss_for_slot([16, 32])
 
+    from stream.cost_model.tile_aware_latency import LatencyEstimate
     from stream.opt.allocation.constraint_optimization.transfer_and_tensor_allocation import (
         TransferAndTensorAllocator,
     )
-    from stream.cost_model.tile_aware_latency import LatencyEstimate
 
     stub, mock_node, slot_lat_var, core = _make_slot_latency_stub(model, ss)
 
@@ -2015,10 +1935,10 @@ def test_slot_latency_degenerate_single_candidate(model):
     """
     ss = _build_ss_for_slot([16])  # single candidate
 
+    from stream.cost_model.tile_aware_latency import LatencyEstimate
     from stream.opt.allocation.constraint_optimization.transfer_and_tensor_allocation import (
         TransferAndTensorAllocator,
     )
-    from stream.cost_model.tile_aware_latency import LatencyEstimate
 
     stub, mock_node, slot_lat_var, core = _make_slot_latency_stub(model, ss)
     stub._TransferAndTensorAllocator__create_tile_selection_vars = (
@@ -2028,9 +1948,7 @@ def test_slot_latency_degenerate_single_candidate(model):
     model.update()
 
     # Single candidate with latency 12
-    stub.latency_estimator.estimate.return_value = LatencyEstimate(
-        latency_total=12, ideal_cycle=10, energy_total=0.0
-    )
+    stub.latency_estimator.estimate.return_value = LatencyEstimate(latency_total=12, ideal_cycle=10, energy_total=0.0)
 
     stub._slot_latency_constraints()
     model.update()
@@ -2051,17 +1969,12 @@ def test_slot_latency_scalar_fallback(model):
     With no search_space, the constraint should use latency_estimator.estimate() with the node's
     inter_core_tiling. CoreCostLUT is no longer used.
     """
-    from stream.opt.allocation.constraint_optimization.transfer_and_tensor_allocation import (
-        TransferAndTensorAllocator,
-    )
     from stream.cost_model.tile_aware_latency import LatencyEstimate
 
     stub, mock_node, slot_lat_var, core = _make_slot_latency_stub(model, search_space=None)
 
     # Configure latency_estimator to return latency=15
-    stub.latency_estimator.estimate.return_value = LatencyEstimate(
-        latency_total=15, ideal_cycle=12, energy_total=0.0
-    )
+    stub.latency_estimator.estimate.return_value = LatencyEstimate(latency_total=15, ideal_cycle=12, energy_total=0.0)
     # Set inter_core_tiling on mock_node
     mock_node.inter_core_tiling = []
 
@@ -2107,6 +2020,7 @@ def test_slot_latency_ub_variable_mode(model):
 
     # Set up idleS to have one resource at slot 0
     from stream.hardware.architecture.noc.communication_link import CommunicationLink
+
     link = MagicMock(spec=CommunicationLink)
     link.id = "test_link"
 
@@ -2121,8 +2035,9 @@ def test_slot_latency_ub_variable_mode(model):
 
     def tracking_method(binary_var, continuous_var, continuous_ub, base_name):
         captured_ubs.append(continuous_ub)
-        return original_method(stub, binary_var=binary_var, continuous_var=continuous_var,
-                               continuous_ub=continuous_ub, base_name=base_name)
+        return original_method(
+            stub, binary_var=binary_var, continuous_var=continuous_var, continuous_ub=continuous_ub, base_name=base_name
+        )
 
     stub._add_binary_scaled_continuous = tracking_method
 
