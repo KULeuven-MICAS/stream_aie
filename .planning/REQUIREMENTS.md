@@ -7,9 +7,9 @@
 
 ### Latency Computation Parity
 
-- [ ] **LAT-01**: TileAwareLatencyEstimator.estimate() produces the same MACs and cycle counts as the old AIECostEstimator + CoreCostLUT for identical tile sizes and workload dimensions
-- [ ] **LAT-02**: _slot_latency_constraints correctly accounts for temporal splits (fusion_splits) without double-counting when the CO runs on the untiled workload
-- [ ] **LAT-03**: The single-candidate degenerate case reproduces the original Phase 1 baseline exactly: latency_total=922357343, latency_per_iteration=10716
+- [x] **LAT-01**: TileAwareLatencyEstimator.estimate() produces the same MACs and cycle counts as the old AIECostEstimator + CoreCostLUT for identical tile sizes and workload dimensions
+- [x] **LAT-02**: _slot_latency_constraints correctly accounts for temporal splits (fusion_splits) without double-counting when the CO runs on the untiled workload
+- [x] **LAT-03**: The single-candidate degenerate case reproduces the original Phase 1 baseline exactly: latency_total=922357343, latency_per_iteration=10716
 
 ### Iterations Correctness
 
@@ -33,9 +33,9 @@
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| LAT-01 | Phase 8 | Pending |
-| LAT-02 | Phase 8 | Pending |
-| LAT-03 | Phase 8 | Pending |
+| LAT-01 | Phase 8 | Complete |
+| LAT-02 | Phase 8 | Complete |
+| LAT-03 | Phase 8 | Complete |
 | ITER-01 | Phase 9 | Pending |
 | ITER-02 | Phase 9 | Pending |
 | VAL-01 | Phase 9 | Pending |

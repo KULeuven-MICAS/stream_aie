@@ -28,7 +28,7 @@ v2.0 introduced variable tile sizes into the CO but the pipeline reorder (Tiling
 **Plans:** 1 plan
 
 Plans:
-- [ ] 08-01-PLAN.md — Add iteration-scale correction to _slot_latency_constraints and validate regression parity
+- [x] 08-01-PLAN.md — Add iteration-scale correction to _slot_latency_constraints and validate regression parity
 
 ### Phase 9: Iterations Correctness + E2E Validation
 **Goal**: The iterations parameter correctly equals prod(T) over temporal dimensions with tile-dependent T values, and COAnalysis validates zero latency mismatches

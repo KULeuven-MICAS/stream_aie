@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v2.1
 milestone_name: milestone
-status: executing
-stopped_at: Phase 8 context gathered
-last_updated: "2026-04-09T07:14:36.375Z"
-last_activity: 2026-04-09 -- Phase 08 execution started
+status: verifying
+stopped_at: Completed 08-01-PLAN.md
+last_updated: "2026-04-09T07:23:39.941Z"
+last_activity: 2026-04-09
 progress:
   total_phases: 2
-  completed_phases: 0
+  completed_phases: 1
   total_plans: 1
-  completed_plans: 0
+  completed_plans: 1
   percent: 0
 ---
 
@@ -27,8 +27,8 @@ See: .planning/PROJECT.md (updated 2026-04-02)
 
 Phase: 08 (latency-computation-parity) — EXECUTING
 Plan: 1 of 1
-Status: Executing Phase 08
-Last activity: 2026-04-09 -- Phase 08 execution started
+Status: Phase complete — ready for verification
+Last activity: 2026-04-09
 
 Progress: [░░░░░░░░░░] 0%
 
@@ -61,6 +61,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 06-variable-compute-latency P03 | 22 | 2 tasks | 15 files |
 | Phase 07-pipeline-integration-e2e-validation P01 | ~15 | 2 tasks | 5 files |
 | Phase 07-pipeline-integration-e2e-validation P02 | 5 | 2 tasks | 2 files |
+| Phase 08-latency-computation-parity P01 | 25 | 2 tasks | 1 files |
 
 ## Accumulated Context
 
@@ -82,6 +83,8 @@ Recent decisions affecting current work:
 - [Phase 06-variable-compute-latency]: CoreCostLUT deleted entirely per D-04; TileAwareLatencyEstimator replaces all cost_lut usages in CO/GA/visualization/stages
 - [Phase 07-pipeline-integration-e2e-validation]: baseline tile must be tile_options[0] for iteration count parity in latency_total comparison
 - [Phase 07-pipeline-integration-e2e-validation]: nargs='+' with list default enables multi-candidate CLI; single-value backward compatible
+- [Phase 08-latency-computation-parity]: Use id(jw) as dict key in _iter_scale_by_jw — Gurobi vars cannot be hashed before model.update()
+- [Phase 08-latency-computation-parity]: Apply int(round()) on scaled_lat to keep MILP coefficients integer; scaling only in if tiled_dims branch
 
 ### Pending Todos
 
@@ -95,6 +98,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-04-08T20:45:56.634Z
-Stopped at: Phase 8 context gathered
-Resume file: .planning/phases/08-latency-computation-parity/08-CONTEXT.md
+Last session: 2026-04-09T07:23:39.939Z
+Stopped at: Completed 08-01-PLAN.md
+Resume file: None
