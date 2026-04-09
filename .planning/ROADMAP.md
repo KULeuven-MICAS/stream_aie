@@ -25,7 +25,10 @@ v2.0 introduced variable tile sizes into the CO but the pipeline reorder (Tiling
   2. _slot_latency_constraints does not double-count temporal splits when building per-candidate tiling factors
   3. The single-candidate regression test produces latency_total=922357343 and latency_per_iteration=10716 (matching original Phase 1 baseline)
   4. The CO model remains feasible and optimal for the degenerate single-candidate case
-**Plans**: TBD
+**Plans:** 1 plan
+
+Plans:
+- [ ] 08-01-PLAN.md — Add iteration-scale correction to _slot_latency_constraints and validate regression parity
 
 ### Phase 9: Iterations Correctness + E2E Validation
 **Goal**: The iterations parameter correctly equals prod(T) over temporal dimensions with tile-dependent T values, and COAnalysis validates zero latency mismatches
@@ -46,5 +49,5 @@ Phases execute in numeric order: 8 -> 9
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 8. Latency Computation Parity | 0/? | Not started | - |
+| 8. Latency Computation Parity | 0/1 | Planning complete | - |
 | 9. Iterations Correctness + E2E Validation | 0/? | Not started | - |
