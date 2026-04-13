@@ -101,7 +101,7 @@ class TransferAndTensorAllocator:
             self._base_orig_dim_sizes = {d: self.search_space.get(d)[0].tile for d in self.search_space.dims()}
         else:
             self._base_orig_dim_sizes = {}
-        self._iter_scale_by_jw: dict = {}
+        self._jw_cache: dict[tuple, gp.Var] = {}  # Cache for joint binary vars keyed by (dim, option_idx) tuples
 
         # tile selection vars (populated in __create_tile_selection_vars if search_space is set)
         self.w: dict[tuple[LayerDim, int], gp.Var] = {}
@@ -1288,15 +1288,8 @@ class TransferAndTensorAllocator:
                                 current_tiling.append((dim, new_factor))
                         lat_est = self.latency_estimator.estimate(n, core, tuple(current_tiling))
                         jw = self._joint_binary_for_combo(per_dim_options, combo, base_name=f"jw_ssc_{n.name}")
-                        # Iteration scaling per D-01/D-02: scale = prod(base_tile / candidate_tile)
-                        # so that iterations_fixed * scaled_lat == true_iterations * raw_lat
-                        scale = 1.0
-                        for (dim, _opts), opt in zip(per_dim_options, combo, strict=False):
-                            if dim in self._base_orig_dim_sizes:
-                                scale *= self._base_orig_dim_sizes[dim] / opt.tile
-                        scaled_lat = int(round(lat_est.latency_total * scale))
-                        lat_coeffs.append((scaled_lat, jw))
-                        self._iter_scale_by_jw[id(jw)] = scale
+                        raw_lat = int(round(lat_est.latency_total))
+                        lat_coeffs.append((raw_lat, jw))
                     expr = quicksum(lat * jw for lat, jw in lat_coeffs)
                     self.model.addConstr(self.slot_latency[s] >= expr, name=f"ssc_lat_{n.name}")
                     self._ssc_node_lat_coeffs[n] = lat_coeffs
@@ -1581,10 +1574,68 @@ class TransferAndTensorAllocator:
         self.total_lat = self.model.addVar(vtype=GRB.INTEGER, name="total_latency")
         self.total_latency = self.total_lat
         assert self.overlap is not None, "Overlap variable must be initialized before objective."
-        self.model.addConstr(
-            self.total_lat
-            == self.iterations * quicksum(self.slot_latency.values()) - (self.iterations - 1) * self.overlap
-        )
+
+        if self.search_space is not None and not self.search_space.is_empty():
+            # Variable tile mode: iterations depend on tile choices.
+            # total = iterations * sum(slot_lat) - (iterations - 1) * overlap
+            #       = iterations * (sum(slot_lat) - overlap) + overlap
+            #
+            # Enumerate all global tile combos to express iterations as a
+            # linear combination of joint binary variables.
+            all_dims = self.search_space.dims()
+            per_dim_opts = [(d, self.search_space.get(d)) for d in all_dims]
+            opt_lists = [opts for _, opts in per_dim_opts]
+
+            # per_iter_net = sum(slot_lat) - overlap  (continuous variable)
+            per_iter_net = self.model.addVar(vtype=GRB.CONTINUOUS, lb=0, name="per_iter_net")
+            self.model.addConstr(
+                per_iter_net == quicksum(self.slot_latency.values()) - self.overlap,
+                name="per_iter_net_def",
+            )
+            # Upper bound for big-M linearization: use a generous bound based on
+            # the number of slots × a large per-slot latency estimate.
+            num_slots = len(self.slot_latency)
+            M_net = num_slots * 100_000  # conservative upper bound on per-iter net latency
+
+            # For each global combo: true_iterations_k * jw_k * per_iter_net
+            total_expr_parts = []
+            for idx, combo in enumerate(iproduct(*opt_lists)):
+                # Compute true iteration count for this combo
+                # true iterations = base_iterations * prod(base_tile / cand_tile)
+                # because temporal_size_d = base_temporal_d * (base_tile_d / cand_tile_d)
+                # and iterations = prod(temporal_sizes).
+                true_iter = self.iterations
+                for (dim, _), opt in zip(per_dim_opts, combo, strict=False):
+                    if dim in self._base_orig_dim_sizes:
+                        true_iter = true_iter * self._base_orig_dim_sizes[dim] // opt.tile
+                jw_k = self._joint_binary_for_combo(per_dim_opts, combo, base_name="jw_iter")
+                # Linearize: aux_k = jw_k * per_iter_net
+                aux_k = self.model.addVar(
+                    vtype=GRB.CONTINUOUS,
+                    lb=0,
+                    ub=M_net,
+                    name=f"iter_aux_{idx}",
+                )
+                self.model.addConstr(aux_k <= M_net * jw_k, name=f"iter_aux_ub1_{idx}")
+                self.model.addConstr(aux_k <= per_iter_net, name=f"iter_aux_ub2_{idx}")
+                self.model.addConstr(
+                    aux_k >= per_iter_net - M_net * (1 - jw_k),
+                    name=f"iter_aux_lb_{idx}",
+                )
+                total_expr_parts.append(true_iter * aux_k)
+
+            # total = sum_k(true_iter_k * aux_k) + overlap
+            self.model.addConstr(
+                self.total_lat == quicksum(total_expr_parts) + self.overlap,
+                name="total_lat_def",
+            )
+        else:
+            # Scalar mode: fixed iterations
+            self.model.addConstr(
+                self.total_lat
+                == self.iterations * quicksum(self.slot_latency.values()) - (self.iterations - 1) * self.overlap
+            )
+
         obj_func = self.total_lat + self.max_core_dma_in + self.max_core_dma_out
         self.model.setObjective(obj_func, GRB.MINIMIZE)
 
@@ -1614,6 +1665,7 @@ class TransferAndTensorAllocator:
             show=False, save_path=os.path.join(self.output_path, "optimization_progress.png")
         )
         self.save_optimization_trace(os.path.join(self.output_path, "optimization_trace.yaml"))
+        self.save_solution_report(os.path.join(self.output_path, "solution_report.yaml"))
 
         assert self.total_latency is not None, "Total latency variable was not created."
         total_latency = int(self.total_latency.X)
@@ -1721,23 +1773,129 @@ class TransferAndTensorAllocator:
                 stop = next(s for s in range(-1, stop_max) if self.z_stop[(t, s)].X > self.VAR_THRESHOLD)
                 assert stop >= 0
 
-    def _eval_and_print_linexpr(self, expr, sol=None):
-        val = expr.getConstant()
+    # ------------------------------------------------------------------ #
+    # Post-solve analysis                                               #
+    # ------------------------------------------------------------------ #
 
-        print("Expression terms:")
-        for i in range(expr.size()):
-            var = expr.getVar(i)
-            coeff = expr.getCoeff(i)
-            x = sol[var] if sol is not None else var.X
-            term_val = coeff * x
-            val += term_val
-            print(f"  {coeff} * {var.VarName} (value={x:.4f}) -> {term_val:.4f}")
+    def build_solution_report(self) -> dict:
+        """Build a comprehensive dict of the solved CO state for inspection.
 
-        if expr.getConstant() != 0:
-            print(f"  constant {expr.getConstant()}")
+        Call after ``solve()`` returns successfully.  The returned dict is
+        JSON/YAML-serialisable and designed for human review or automated
+        regression comparison.
 
-        print(f"Total = {val:.4f}")
-        return val
+        Sections
+        --------
+        tile_selection   – chosen tiles per dimension with all candidates
+        iterations       – base, true, and per-dim breakdown
+        slot_latencies   – per-slot latency values and which node dominates
+        transfer_summary – per-transfer: tensor size, reuse, fires, amortised lat
+        compute_summary  – per-compute-node: raw latency
+        objective        – total_latency, per_iter, overlap, components
+        """
+        report: dict = {}
+        report["tile_selection"] = self._report_tile_selection()
+        report["iterations"] = self._report_iterations()
+        report["slot_latencies"] = self._report_slot_latencies()
+        report["transfer_summary"] = self._report_transfers()
+        report["compute_summary"] = self._report_compute()
+        report["objective"] = self._report_objective()
+        return report
+
+    def save_solution_report(self, path: str) -> None:
+        """Serialise ``build_solution_report()`` to a YAML file."""
+        import yaml  # noqa: PLC0415
+
+        report = self.build_solution_report()
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w") as f:
+            yaml.dump(report, f, default_flow_style=False, sort_keys=False, width=120)
+
+    # -- report helpers --------------------------------------------------
+
+    def _report_tile_selection(self) -> dict:
+        if not self.w:
+            return {}
+        result = {}
+        for dim in self.search_space.dims():
+            options = self.search_space.get(dim)
+            candidates = [opt.tile for opt in options]
+            chosen_tile = None
+            for k, opt in enumerate(options):
+                if self.w[(dim, k)].X > self.VAR_THRESHOLD:
+                    chosen_tile = opt.tile
+            result[str(dim)] = {"candidates": candidates, "selected": chosen_tile}
+        return result
+
+    def _report_iterations(self) -> dict:
+        base = self.iterations  # from SSIS temporal sizes with base tiles
+        selected = self.get_selected_tiles()
+        true_iter = base
+        per_dim = {}
+        for dim in self.search_space.dims() if self.search_space else []:
+            base_tile = self._base_orig_dim_sizes.get(dim)
+            chosen = selected.get(dim)
+            if base_tile and chosen:
+                factor = base_tile / chosen  # > 1 means more iterations
+                true_iter = int(true_iter * factor)
+                per_dim[str(dim)] = {"base_tile": base_tile, "chosen_tile": chosen, "scale": round(factor, 4)}
+        return {"base_iterations": base, "true_iterations": true_iter, "per_dim": per_dim}
+
+    def _report_slot_latencies(self) -> list[dict]:
+        rows = []
+        for s in sorted(self.slot_latency):
+            lat = self.slot_latency[s].X
+            # Find which node(s) are in this slot
+            nodes_in_slot = [n.name for n in self.slot_of if self.slot_of[n] == s]
+            rows.append({"slot": s, "latency": round(lat, 2), "nodes": nodes_in_slot})
+        return rows
+
+    def _report_transfers(self) -> list[dict]:
+        rows = []
+        for tr in self.transfer_nodes:
+            entry: dict = {"name": tr.name, "slot": self.slot_of[tr]}
+            t = tr.inputs[0] if tr.inputs else (tr.outputs[0] if tr.outputs else None)
+            if t is not None:
+                # Reuse level
+                applicable_vars = self.ssis[tr].get_applicable_temporal_variables()
+                for stop in range(-1, len(applicable_vars)):
+                    if self.z_stop[(t, stop)].X > self.VAR_THRESHOLD:
+                        entry["reuse_stop"] = stop
+                        break
+                # Fire count
+                if hasattr(self, "fires") and tr in self.fires:
+                    entry["fires"] = round(self.fires[tr].X)
+            rows.append(entry)
+        return rows
+
+    def _report_compute(self) -> list[dict]:
+        rows = []
+        for n in self.ssc_nodes:
+            entry: dict = {"name": n.name, "slot": self.slot_of[n]}
+            if n in self._ssc_node_lat_coeffs:
+                coeffs = self._ssc_node_lat_coeffs[n]
+                # Find the active coefficient
+                for lat, jw in coeffs:
+                    if jw is None or jw.X > self.VAR_THRESHOLD:
+                        entry["latency"] = lat
+                        break
+            entry["slot_latency"] = round(self.slot_latency[self.slot_of[n]].X, 2)
+            rows.append(entry)
+        return rows
+
+    def _report_objective(self) -> dict:
+        total = int(self.total_latency.X)
+        overlap = int(self.overlap.X)
+        per_iter = sum(sl.X for sl in self.slot_latency.values())
+        iter_info = self._report_iterations()
+        true_iter = iter_info["true_iterations"]
+        return {
+            "total_latency": total,
+            "per_iteration_sum": round(per_iter, 2),
+            "overlap": overlap,
+            "true_iterations": true_iter,
+            "check_total": round(true_iter * per_iter - (true_iter - 1) * overlap, 0),
+        }
 
     def _retrieve_core_allocation(self, node: Node) -> tuple[tuple[Core, ...], ...]:
         if isinstance(node, InEdge):
@@ -1904,12 +2062,21 @@ class TransferAndTensorAllocator:
     ) -> gp.Var:
         """Recursively AND w[dim,k] variables for this joint combination (D-03).
 
+        Results are cached by (dim, option_index) key so that multiple callers
+        (SSIS coefficients, tensor sizing, latency constraints) share the same
+        Gurobi variable for the same combination.
+
         Parameters
         ----------
         per_dim_options : list of (dim, options_list)
         combo : tuple of TileSizeOption, one per dim
         base_name : str prefix for the auxiliary AND variable names (default "jw")
         """
+        # Build cache key from (dim, option_index) pairs
+        cache_key = tuple((dim, opts.index(opt)) for (dim, opts), opt in zip(per_dim_options, combo, strict=False))
+        if cache_key in self._jw_cache:
+            return self._jw_cache[cache_key]
+
         binaries = []
         for (dim, opts), opt in zip(per_dim_options, combo, strict=False):
             k = opts.index(opt)
@@ -1930,6 +2097,7 @@ class TransferAndTensorAllocator:
                 b=b,
                 base_name=f"{base_name}_{dim_names}",
             )
+        self._jw_cache[cache_key] = result
         return result
 
     def _active_transfer_latency(
@@ -1973,11 +2141,9 @@ class TransferAndTensorAllocator:
                 for fires_c, sf_c, jw in rl_s:
                     sb = size_by_jw.get(id(jw))
                     if sb is not None:
-                        # Candidate appears in both tensor-tiled and SSIS-tiled enumerations
                         lat_num = ceil(sb / min_bw)
-                        amort = lat_num / sf_c  # float division per D-04
+                        amort = lat_num / sf_c
                     else:
-                        # SSIS candidate not in tensor candidates — use max tensor size as conservative fallback
                         lat_num = ceil(self._tensor_max_size.get(t, 0) / min_bw)
                         amort = lat_num / sf_c
                     amortized_coeffs.append((amort, jw))
