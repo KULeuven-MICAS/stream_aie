@@ -5,7 +5,7 @@ from copy import deepcopy
 from dataclasses import dataclass, field
 from functools import reduce
 from itertools import product
-from math import dist, isqrt, prod
+from math import isqrt, prod
 from typing import Self, cast
 
 from snaxc.dialects.snax import LayoutCast
@@ -850,7 +850,7 @@ class TransferToRuntimeSequence(RewritePattern):
             strides.append(Stride(var.size, stride, iteration_mults[var], spatial))
 
         stride_dict = StrideSet(tuple(strides)).split()
-        stride_dict = {x: y.canonicalize().legalize() for x, y in stride_dict.items()}
+        stride_dict = {x: y.force_squash().legalize() for x, y in stride_dict.items()}
 
         # select correct hop for fifo:
         if isinstance(op, PullOp):
