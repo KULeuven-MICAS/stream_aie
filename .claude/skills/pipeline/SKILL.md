@@ -21,6 +21,4 @@ Use when:
 | `pipeline-stages.md` | Each active stage with its responsibility, inputs/outputs, and position in the flow |
 | `stage-execution.md` | StageContext, MainStage/LeafStage execution model, how stages compose and run |
 
-*Content files will be added by Phase 12.*
-
 See also: `.claude/skills/optimization/` for solver backend details used by the allocation stage.
