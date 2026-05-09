@@ -21,6 +21,4 @@ Use when:
 | `solver-backends.md` | SolverModel ABC, GurobiBackend, ORToolsBackend, factory pattern, when to use each |
 | `constraint-selection.md` | ConstraintSelection dataclass, its relationship to NamespaceConstraints, which constraints apply to which hardware |
 
-*Content files will be added by Phase 11.*
-
 See also: `.claude/skills/constraints/` for MILP formulation details and namespace constraint dispatch.
