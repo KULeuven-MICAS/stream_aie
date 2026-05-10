@@ -21,6 +21,4 @@ Use when:
 | `api-reference.md` | optimize_allocation_co() and optimize_mapping() signatures, CLI flags, common usage patterns, return types |
 | `testing-patterns.md` | Test organization, backend patching patterns, study scripts, how to add new tests |
 
-*Content files will be added by Phase 14.*
-
 See also: `.claude/skills/pipeline/` for how API entry points trigger the stage pipeline.
