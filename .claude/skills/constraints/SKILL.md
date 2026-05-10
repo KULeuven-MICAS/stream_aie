@@ -21,6 +21,4 @@ Use when:
 | `milp-formulation.md` | TransferAndTensorAllocator model structure: decision variables, constraint groups, objective function, ConstraintSelection guards |
 | `namespace-constraints.md` | NamespaceConstraints base class, AIE2Constraints, hardware-specific constraint dispatch |
 
-*Content files will be added by Phase 13.*
-
 See also: `.claude/skills/optimization/` for solver backend abstraction and ConstraintSelection dataclass.
