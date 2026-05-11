@@ -30,7 +30,7 @@ Runs the full CO pipeline for a single hardware/workload/mapping triple. The pip
 
 ### Return Type
 
-Returns a `StageContext` object. The optimization result is accessible by calling `ctx.get("allocation")` on the returned context, which provides a `SolveStats` object for the MILP solve. If `enable_codegen=True`, the generated MLIR module is accessible via `ctx.get("module")`.
+Returns a `StageContext` object. The optimization result is accessible via `ctx.get("scheduler")`, which returns a `SteadyStateScheduler` instance containing the solved allocation. The updated mapping is at `ctx.get("mapping")` and the workload at `ctx.get("workload")`. `SolveStats` is available by calling `model.solve_stats()` on the solver model inside the allocator but is not persisted to the `StageContext`. If `enable_codegen=True`, the generated MLIR module is accessible via `ctx.get("module")`.
 
 ### Backend Validation
 
