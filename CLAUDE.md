@@ -16,10 +16,8 @@ stream_aie/
 ├── main_swiglu_dse.py                  # CLI: Multi-mapping SwiGLU DSE exploration
 ├── main_aie_co.py                      # CLI: Additional CO workload variant
 ├── main_stream_co.py                   # CLI: Stream CO workload variant
-├── main_stream_ga.py                   # CLI: Genetic algorithm allocation variant
 ├── main_aie_codegen_conv2d.py          # CLI: Conv2D AIE codegen
 ├── main_gemm_manual.py                 # CLI: Manual GEMM configuration
-├── main_aie_ga.py                      # CLI: Genetic algorithm allocation
 ├── stream/
 │   ├── api.py                          # Public API
 │   ├── datatypes.py                    # LayerDim, InterCoreTiling type aliases
@@ -30,12 +28,11 @@ stream_aie/
 │   ├── mapping/                        # Mapping data model and DSE variant generation
 │   ├── opt/
 │   │   ├── allocation/
-│   │   │   ├── constraint_optimization/   # MILP-based allocation
+│   │   │   └── constraint_optimization/   # MILP-based allocation
 │   │   │   │   ├── allocation.py              # ComputeAllocator
 │   │   │   │   ├── transfer_and_tensor_allocation.py  # TransferAndTensorAllocator
 │   │   │   │   ├── context.py                 # ConstraintContext, NamespaceConstraints
 │   │   │   │   └── config.py                  # ConstraintOptStageConfig, CoreConstraintProfile
-│   │   │   └── genetic_algorithm/         # GA-based allocation (alternative to CO)
 │   │   └── solver/                        # Solver facade (SolverModel ABC, backends)
 │   ├── parser/                         # ONNX and workload parsing
 │   ├── stages/                         # Pipeline stage framework
@@ -44,7 +41,7 @@ stream_aie/
 │   │   ├── parsing/                    # Accelerator, mapping, ONNX parser stages
 │   │   ├── generation/                 # Tiling and mapping generation stages
 │   │   ├── estimation/                 # Core cost and memory estimation stages
-│   │   └── allocation/                 # CO and GA allocation stages
+│   │   └── allocation/                 # CO allocation stages
 │   ├── visualization/                  # Plotting and trace export
 │   └── workload/                       # Workload DAG representation and steady-state model
 ├── tests/                              # pytest test suite
@@ -58,10 +55,9 @@ stream_aie/
 - `main_swiglu.py` -- SwiGLU workload: constraint optimization allocation + optional AIE codegen
 - `main_swiglu_dse_single.py` -- Single-mapping SwiGLU design space evaluation
 - `main_swiglu_dse.py` -- Multi-mapping SwiGLU design space exploration
-- `main_aie_co.py`, `main_stream_co.py`, `main_stream_ga.py` -- Additional workload variants
+- `main_aie_co.py`, `main_stream_co.py` -- Additional workload variants
 - `main_aie_codegen_conv2d.py` -- Conv2D AIE codegen
 - `main_gemm_manual.py` -- Manual GEMM configuration
-- `main_aie_ga.py` -- Genetic algorithm allocation
 
 **Public API (`stream/api.py`):**
 - `optimize_allocation_co(hardware, workload, mapping, ...)` -- Full CO pipeline: parse -> tile -> cost -> MILP -> memory estimation
