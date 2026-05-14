@@ -167,6 +167,26 @@ an inconsistent state.
 | Context reads       | `accelerator`, `workload`, `output_path`; optional: `seq_len_tile_size`, `embedding_tile_size`, `hidden_tile_size`, `last_gemm_down`, `max_nb_mappings`, `nb_rows_to_use`, `nb_cols_to_use` |
 | Context writes      | `workload`, `mapping_path`, `output_path` (per variant, then best result)                      |
 
+#### GenericMappingGenerationStage
+
+**Source:** `stream/stages/generation/generic_mapping_generation.py`
+
+Generates per-fusion-group mapping YAMLs from a workload and accelerator pair, using automatic core selection
+and tiling inference. Before generating mappings, the stage calls `determine_fusion_cut_points(workload)` to
+identify residual block boundaries (Add+Relu patterns and MaxPool front-end boundaries). These cut points are
+passed to `GenericMappingGenerator.generate_all_groups(cut_points=...)`, which in turn calls
+`split_fusion_groups(cut_points=...)` to split the workload into bounded groups.
+
+For ResNet18, this produces 11 groups (1 front-end, 8 residual blocks, 1 post-residual, 1 Gemm tail).
+Each group receives an independently generated and validated mapping YAML.
+
+| Attribute           | Value                                              |
+|---------------------|----------------------------------------------------|
+| REQUIRED_FIELDS     | `accelerator`, `workload`, `output_path`           |
+| Context reads       | `accelerator`, `workload`, `output_path`           |
+| Context writes      | `group_mapping_paths`, `sub_workloads`             |
+| Delegates to        | `FusionGroupIterationStage` (next in list_of_callables) |
+
 ---
 
 ### Estimation Stages
@@ -247,6 +267,7 @@ added fresh.
 | ConstraintOptimizationAllocationStage  | `workload`, `accelerator`, `mapping`, `cost_lut`, `fusion_splits`, `output_path`, `backend`, `constraint_selection` | `workload`, `mapping`, `scheduler` |
 | MemoryAccessesEstimationStage          | `workload`, `accelerator`, `mapping`, `scheduler`, `output_path`                | `workload`, `accelerator`, `memory_accesses`  |
 | MappingGenerationStage                 | `accelerator`, `workload`, `output_path`, optional tile params                  | `workload`, `mapping_path`, `output_path` (per variant) |
+| GenericMappingGenerationStage          | `accelerator`, `workload`, `output_path`                                        | `group_mapping_paths`, `sub_workloads`        |
 
 Note that several stages overwrite keys that earlier stages wrote. For example, `TilingGenerationStage`
 replaces the raw `workload` (from `ONNXModelParserStage`) with a tiled version. Later stages
@@ -284,9 +305,22 @@ AcceleratorParserStage -> ONNXModelParserStage -> MappingGenerationStage -> [Map
 TilingGenerationStage -> CoreCostEstimationStage -> ConstraintOptimizationAllocationStage ->
 MemoryAccessesEstimationStage]
 
+### optimize_allocation_co_generic (auto-mapping CO)
+
+Uses `GenericMappingGenerationStage` in place of `MappingParserStage` to auto-infer mapping from
+workload+hardware. The stage calls `determine_fusion_cut_points()` to identify residual block boundaries,
+then `GenericMappingGenerator` produces per-group YAMLs. `FusionGroupIterationStage` iterates over groups,
+running the inner pipeline (MappingParser -> TilingGeneration -> CoreCostEstimation -> CO Allocation ->
+MemoryAccessesEstimation) once per group.
+
+Stage order:
+AcceleratorParserStage -> ONNXModelParserStage -> GenericMappingGenerationStage ->
+FusionGroupIterationStage -> [MappingParserStage -> TilingGenerationStage -> CoreCostEstimationStage ->
+ConstraintOptimizationAllocationStage -> MemoryAccessesEstimationStage]
+
 ### Optional Code Generation
 
-Both variants can prepend `AIECodeGenerationStage` when called with `enable_codegen=True`. This stage runs
+All pipeline variants can prepend `AIECodeGenerationStage` when called with `enable_codegen=True`. This stage runs
 before `AcceleratorParserStage` and requires the `npu` context key to identify the NPU variant to target.
 
 ---

@@ -101,6 +101,57 @@ The `mip_gap`, `node_count`, and `iteration_count` fields are populated by the G
 
 ---
 
+## Workload Utilities
+
+### determine_fusion_cut_points()
+
+**Source:** `stream/workload/workload.py`
+
+Module-level function that analyzes a parsed `Workload` graph and returns a list of node names where
+fusion group boundaries should be placed. Used by `GenericMappingGenerationStage` to split large workloads
+into manageable groups before generating per-group mappings.
+
+**Heuristics applied (in topological order):**
+1. **MaxPool nodes:** End the front-end group (e.g., Conv1 -> Relu -> MaxPool).
+2. **Relu nodes following Add:** Each Add node whose sole ComputationNode successor is a Relu marks
+   a residual block boundary. The Relu is the cut point (split occurs AFTER the Relu).
+
+**Signature:**
+
+```python
+def determine_fusion_cut_points(workload: Workload) -> list[str]:
+```
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `workload` | `Workload` | Parsed workload graph |
+| **Returns** | `list[str]` | Node names to pass to `split_fusion_groups(cut_points=...)` |
+
+**Example (ResNet18):** Returns 9 cut points (1 MaxPool + 8 Relu), producing 11 groups when combined with the existing Flatten FusionEdge split.
+
+### split_fusion_groups() (extended)
+
+**Source:** `stream/workload/workload.py` (method on `Workload`)
+
+Extended to accept an optional `cut_points` parameter. When provided, the method splits at both
+FusionEdge boundaries (existing behavior) AND at the specified cut-point nodes. Each cut-point node
+stays in the preceding group; its output tensor becomes an OutEdge/InEdge boundary pair.
+
+**Signature:**
+
+```python
+def split_fusion_groups(self, cut_points: list[str] | None = None) -> list[Workload]:
+```
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `cut_points` | `list[str] \| None` | `None` | Node names after which to split. `None` preserves original FusionEdge-only behavior. |
+| **Returns** | `list[Workload]` | | Sub-workloads, one per group |
+
+**Backward compatibility:** When `cut_points` is `None`, behavior is identical to the original (FusionEdge-only splits).
+
+---
+
 ## CLI Scripts
 
 All CLI scripts live at the repository root. Each calls either `optimize_allocation_co()` or `optimize_mapping()` with pre-configured hardware, workload, and mapping paths for a specific target.
