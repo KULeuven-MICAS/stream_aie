@@ -10,6 +10,8 @@ stream_aie exposes two programmatic entry points: `optimize_allocation_co()` run
 
 Runs the full CO pipeline for a single hardware/workload/mapping triple. The pipeline stages are: parse accelerator, parse ONNX workload, parse mapping, generate tiling, estimate core costs, run MILP allocation (ComputeAllocator then TransferAndTensorAllocator), and estimate memory accesses. Optionally, an AIE code generation stage can be prepended.
 
+**AIE codegen prerequisite:** `enable_codegen=True` requires `pip install '.[aie]'` and `source setup_mlir_aie_pythonpath.sh` (Linux x86_64, Python 3.12/3.13).
+
 ### Parameters
 
 | Name | Type | Default | Description |
