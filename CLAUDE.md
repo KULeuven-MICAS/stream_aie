@@ -89,3 +89,4 @@ Deep-dive documentation for specific subsystems lives in `.claude/skills/`. Each
 - `.claude/skills/pipeline/` -- Pipeline stages, StageContext, MainStage/LeafStage execution model
 - `.claude/skills/constraints/` -- MILP formulation, TransferAndTensorAllocator, NamespaceConstraints dispatch
 - `.claude/skills/api-testing/` -- Public API reference, CLI flags, testing patterns and conventions
+- `.claude/skills/hardware/` -- Hardware core model (roles, namespaces, AIE/TPU-like examples), per-core performance estimation
