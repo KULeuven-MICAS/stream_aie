@@ -9,7 +9,7 @@ description: Use when using stream_aie programmatically, running CLI scripts, wr
 
 Use when:
 - Calling optimize_allocation_co() or optimize_mapping() programmatically
-- Running CLI scripts (main_gemm.py, main_swiglu.py, etc.)
+- Running CLI scripts (scripts/main_gemm.py, scripts/main_swiglu.py, etc.)
 - Writing or debugging tests for constraint groups or backends
 - Setting up backend patching for test isolation
 - Understanding the study scripts (constraint_toggle_study.py)

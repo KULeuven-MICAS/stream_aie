@@ -2,73 +2,17 @@
 
 ## Overview
 
-The TETRA constraint optimization pipeline uses two MILP (Mixed-Integer Linear Programming) models in sequence. First, `ComputeAllocator` assigns computation nodes to hardware cores and time slots. Then, `TransferAndTensorAllocator` decides where tensors are stored and how data transfers are routed across the communication network. Both models are built through the solver facade (`SolverModel` ABC) and solved using either Gurobi or OR-Tools backends. The build pipeline for both follows the same pattern: prepare data, create variables, add constraints, set objective, solve. Source files: `stream/opt/allocation/constraint_optimization/allocation.py` (ComputeAllocator, 646 lines) and `stream/opt/allocation/constraint_optimization/transfer_and_tensor_allocation.py` (TransferAndTensorAllocator, 2155 lines).
+The TETRA constraint optimization centers on a single MILP (Mixed-Integer Linear Programming) model, `TransferAndTensorAllocator`, which decides where tensors are stored and how data transfers are routed across the communication network. Computation nodes are placed on cores *before* the MILP runs — driven by the mapping rather than by an optimization model (see Node-to-Core Placement below). The MILP is built through the solver facade (`SolverModel` ABC) and solved using either Gurobi or OR-Tools backends. Its build pipeline follows the pattern: prepare data, create variables, add constraints, set objective, solve. Source file: `stream/opt/allocation/constraint_optimization/transfer_and_tensor_allocation.py` (TransferAndTensorAllocator, 2155 lines).
 
 ---
 
-## Two-Stage Allocation
+## Node-to-Core Placement
 
-The two MILPs execute sequentially, with the first stage's output serving as a fixed input to the second.
+Computation nodes are assigned to cores *before* the MILP runs, driven by the mapping rather than by an optimization model. The mapping supplies a `core_allocation` list per node — either hand-written in the mapping YAML or produced by `GenericMappingGenerator._select_cores_for_node()` (in `stream/mapping/generic_generator.py`). `get_partitioned_nodes()` (in `stream/opt/allocation/constraint_optimization/utils.py`) then partitions each node across exactly those cores according to its inter-core tiling, calling `set_chosen_core_allocation()` on each partition. Time slots are assigned by `Workload.get_timeslots(mapping)` — resource-aware: two same-class nodes may share a slot only when a disjoint core/link assignment exists for them.
 
-ComputeAllocator runs first. It determines which computation node runs on which hardware core, how many cores each node uses (k-split factor), and which time slot each node occupies. Its output — the node-to-core-and-slot mapping — becomes a fixed parameter in the second stage.
+`SteadyStateScheduler` (in `stream/cost_model/steady_state_scheduler.py`) orchestrates this: it builds the transfer graph from the placed nodes, computes the time slots, and then constructs and solves the `TransferAndTensorAllocator` MILP with those node-to-core placements fixed.
 
-TransferAndTensorAllocator runs second. Given the fixed node placement, it determines where each tensor is stored (which memory cores), which routing path carries each data transfer between cores, how data reuse levels are structured, and how DMA channels are allocated. This is the larger and more complex of the two models, at 2155 lines.
-
-Both models minimize total execution latency, accounting for pipelining overlap: when the workload runs for multiple iterations, steady-state schedules can be pipelined so that idle periods on one resource overlap with active periods on another. The objective captures this by subtracting an overlap term from the raw iteration latency.
-
----
-
-## ComputeAllocator
-
-`ComputeAllocator` solves the node-to-core placement problem. It answers: for each computation node in the workload, which core(s) should run it, and in which time slot?
-
-### Build Pipeline
-
-`get_optimal_allocations()` is the public entry point. It calls `_prepare_constants()` to precompute all static data into a frozen `ComputeAllocatorConstants` dataclass — latencies, energies, dependency maps, node groups, per-core weights, and per-core capacities. Then `_build_constraint_model(const)` constructs the MILP by running:
-
-    _create_basic_sets  →  _create_variables  →  constraint methods  →  _set_objective
-
-Each step reads from `ComputeAllocatorConstants` and writes solver variables and constraints into the `SolverModel`.
-
-### Decision Variables
-
-| Variable | Type | Purpose |
-|----------|------|---------|
-| `k_vec[n,k]` | Binary | One-hot encoding of how many cores node `n` uses (k-split factor); exactly one value of `k` is 1 per node |
-| `k_splits[n]` | Integer | Derived k-split count for node `n`, equal to the sum of `k * k_vec[n,k]` over all `k` |
-| `core_asgn[c,n]` | Binary | Whether core `c` is assigned to node `n` |
-| `slot_asgn[s,n]` | Binary | Whether node `n` is assigned to time slot `s` (one-hot over slots) |
-| `asgn[c,s,n]` | Binary | Whether node `n` runs on core `c` in slot `s` (3D assignment tensor) |
-| `slot_idx[n]` | Integer | Derived slot index for node `n`, computed as the weighted sum of `slot_asgn` |
-| `lat_id_core[n,c]` | Integer | Latency of node `n` on core `c`, selected from the cost LUT based on `k_vec` |
-| `lat_core_slot[c,s]` | Integer | Latency contribution of core `c` in slot `s` |
-| `lat_slot[s]` | Integer | Maximum latency across all cores in slot `s` |
-| `w_split[n]` | Integer | Per-node weight (capacity usage) normalized to the node's k-split |
-| `w_core[c]` | Integer | Total weight allocated to core `c` across all nodes |
-| `idle_start[c,s]` / `idle_end[c,s]` | Binary | Idle period indicators: 1 if core `c` has not yet started (or has finished) by slot `s` |
-| `idle_sum[c]` | Integer | Total idle slot-latency for core `c`, summed across all idle slots |
-| `lat_iter` | Integer | Per-iteration latency, equal to the sum of all slot latencies |
-| `idle_min` | Integer | Minimum idle time across all cores, representing achievable pipelining overlap |
-| `total_lat` | Integer | Total latency across all iterations, accounting for overlap |
-
-### Constraint Groups
-
-Each constraint group is implemented as a separate method called by `_build_constraint_model`:
-
-- `_add_k_split_constraints`: Each node selects exactly one k-split factor via the one-hot `k_vec` encoding; `k_splits[n]` is defined as the resulting integer value.
-- `_add_core_assignment_constraints`: The number of cores assigned to a node must equal its k-split value; each core is assigned to at most one node per slot; the allowed (core, k-split) combinations are gated by a precomputed split table from the cost LUT.
-- `_add_slot_assignment_constraints`: Each node is assigned to exactly one slot; the 3D `asgn[c,s,n]` tensor is consistent with both `core_asgn` and `slot_asgn`; at most one node runs on each core per slot.
-- `_add_group_constraints`: Nodes in the same group (e.g., tiles of the same layer) must share the same core assignment pattern — they use identical cores across slots.
-- `_add_dependency_constraints`: If node A depends on node B, A's slot index must be strictly greater than B's, enforcing topological ordering.
-- `_add_weight_constraints`: Per-core capacity limits — the combined weight of all nodes assigned to a core must not exceed that core's capacity.
-- `_add_latency_constraints`: Selects the correct latency from the cost LUT based on the core and k-split assignment; `lat_slot[s]` is the maximum latency across all cores active in slot `s`. Because the objective minimizes total latency (which sums `lat_slot`), lower-bounding constraints are sufficient — the solver drives `lat_slot` to its true maximum.
-- `_add_overlap_constraints`: Computes idle start/end indicators for each core-slot pair to determine pipelining overlap. `idle_sum[c]` accumulates slot latency during idle periods. `idle_min` is the minimum of all `idle_sum` values, representing the overlap achievable when the steady-state schedule repeats across iterations.
-
-### Objective
-
-    minimize total_lat = iterations * lat_iter - (iterations - 1) * idle_min
-
-`lat_iter` is the sum of all slot latencies (the per-iteration cost). `idle_min` is the minimum total idle time across all cores, representing the maximum achievable overlap during pipelining. When `iterations = 1`, the overlap term vanishes and the objective reduces to minimizing the sum of slot latencies.
+The MILP minimizes total execution latency, accounting for pipelining overlap: when the workload runs for multiple iterations, steady-state schedules can be pipelined so that idle periods on one resource overlap with active periods on another. The objective captures this by subtracting an overlap term from the raw iteration latency (see TTA Overlap and Objective below).
 
 ---
 
@@ -171,7 +115,7 @@ The DMA terms in the objective act as a soft pressure: even though the hard DMA 
 
 ## Linearization Helpers
 
-Both allocators use standard MILP linearization techniques. The following helper methods in `TransferAndTensorAllocator` encapsulate the most common patterns:
+`TransferAndTensorAllocator` uses standard MILP linearization techniques. The following helper methods encapsulate the most common patterns:
 
 `_add_binary_product(a, b, base_name)` linearizes the AND of two binary variables. It introduces an auxiliary binary variable `w` with three constraints: `w <= a`, `w <= b`, `w >= a + b - 1`. This is the standard LP relaxation of a binary product. It is used heavily in memory capacity and buffer descriptor constraints, where two binary conditions — tensor placement choice and reuse stop level — must both hold simultaneously.
 

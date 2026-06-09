@@ -2,7 +2,7 @@
 
 Stream AIE is a design-space exploration and constraint optimization framework for AMD AIE (AI Engine) accelerators, developed as part of the TETRA project at KU Leuven MICAS. It takes ONNX workload graphs and hardware descriptions as inputs and produces optimal tensor placement and transfer-path allocation via MILP (Mixed-Integer Linear Programming).
 
-The framework runs a pipeline of stages: parse hardware/workload/mapping, generate tilings, estimate costs, run MILP allocation, estimate memory. Two MILP allocators handle the core optimization: `ComputeAllocator` assigns computation nodes to cores, and `TransferAndTensorAllocator` decides tensor placement and routing paths. The solver abstraction supports Gurobi and OR-Tools backends (GSCIP and HiGHS) behind a unified API.
+The framework runs a pipeline of stages: parse hardware/workload/mapping, generate tilings, estimate costs, run MILP allocation, estimate memory. Computation nodes are placed on cores according to the mapping, and the `TransferAndTensorAllocator` MILP decides tensor placement and routing paths. The solver abstraction supports Gurobi and OR-Tools backends (GSCIP and HiGHS) behind a unified API.
 
 For deep dives on specific subsystems, see `.claude/skills/`. Each group has a `SKILL.md` describing when to load it.
 
@@ -10,14 +10,7 @@ For deep dives on specific subsystems, see `.claude/skills/`. Each group has a `
 
 ```
 stream_aie/
-├── main_gemm.py                        # CLI: GEMM workload CO allocation + AIE codegen
-├── main_swiglu.py                      # CLI: SwiGLU workload CO allocation + AIE codegen
-├── main_swiglu_dse_single.py           # CLI: Single-mapping SwiGLU DSE evaluation
-├── main_swiglu_dse.py                  # CLI: Multi-mapping SwiGLU DSE exploration
-├── main_aie_co.py                      # CLI: Additional CO workload variant
-├── main_stream_co.py                   # CLI: Stream CO workload variant
-├── main_aie_codegen_conv2d.py          # CLI: Conv2D AIE codegen
-├── main_gemm_manual.py                 # CLI: Manual GEMM configuration
+├── scripts/                            # CLI entry points (main_*.py) and analysis/ (plot_*, postprocess_*)
 ├── stream/
 │   ├── api.py                          # Public API
 │   ├── datatypes.py                    # LayerDim, InterCoreTiling type aliases
@@ -29,9 +22,8 @@ stream_aie/
 │   ├── opt/
 │   │   ├── allocation/
 │   │   │   └── constraint_optimization/   # MILP-based allocation
-│   │   │   │   ├── allocation.py              # ComputeAllocator
 │   │   │   │   ├── transfer_and_tensor_allocation.py  # TransferAndTensorAllocator
-│   │   │   │   ├── context.py                 # ConstraintContext, NamespaceConstraints
+│   │   │   │   ├── context.py                 # TransferAndTensorContext, NamespaceConstraints
 │   │   │   │   └── config.py                  # ConstraintOptStageConfig, CoreConstraintProfile
 │   │   └── solver/                        # Solver facade (SolverModel ABC, backends)
 │   ├── parser/                         # ONNX and workload parsing
@@ -50,14 +42,16 @@ stream_aie/
 
 ## Key Entry Points
 
-**CLI scripts (repo root):**
-- `main_gemm.py` -- GEMM workload: constraint optimization allocation + optional AIE codegen
-- `main_swiglu.py` -- SwiGLU workload: constraint optimization allocation + optional AIE codegen
-- `main_swiglu_dse_single.py` -- Single-mapping SwiGLU design space evaluation
-- `main_swiglu_dse.py` -- Multi-mapping SwiGLU design space exploration
-- `main_aie_co.py`, `main_stream_co.py` -- Additional workload variants
-- `main_aie_codegen_conv2d.py` -- Conv2D AIE codegen
-- `main_gemm_manual.py` -- Manual GEMM configuration
+**CLI scripts (`scripts/`, run from the repo root):**
+- `scripts/main_gemm.py` -- GEMM workload: constraint optimization allocation + optional AIE codegen
+- `scripts/main_swiglu.py` -- SwiGLU workload: constraint optimization allocation + optional AIE codegen
+- `scripts/main_swiglu_dse_single.py` -- Single-mapping SwiGLU design space evaluation
+- `scripts/main_swiglu_dse.py` -- Multi-mapping SwiGLU design space exploration
+- `scripts/main_aie_co.py`, `scripts/main_stream_co.py` -- Additional workload variants
+- `scripts/main_gemm_codegen.py` -- Direct GEMM AIE MLIR codegen (xDSL transforms, no CO pipeline)
+- `scripts/analysis/` -- plotting (`plot_*.py`) and trace post-processing (`postprocess_*.py`) utilities
+
+Scripts import `stream` as an installed package (`pip install -e .`); run them from the repo root so relative input paths (e.g. `stream/inputs/...`) resolve.
 
 **Public API (`stream/api.py`):**
 - `optimize_allocation_co(hardware, workload, mapping, ...)` -- Full CO pipeline: parse -> tile -> cost -> MILP -> memory estimation

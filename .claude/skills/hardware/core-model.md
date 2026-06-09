@@ -21,7 +21,7 @@ The four allowed roles are defined in `ALLOWED_KINDS` in `stream/parser/core_val
 - `"shim"` — a DMA interface tile bridging on-chip and off-chip data transfers. In the AIE2 column, row 0 is always the shim DMA tile. Does not run computation.
 - `"offchip"` — an off-chip memory controller (DRAM). Present in TPU-like hardware as the top-level memory node. A PROJECT.md decision treats `"offchip"` like `"shim"` for transfer-type classification.
 
-Roles drive the pipeline in three places: `GenericMappingGenerator._select_cores_for_node()` (in `stream/mapping/generic_generator.py`) has `_SKIP_TYPES = {"offchip", "shim"}` which excludes those roles from computation assignment; `build_constraint_context()` in `stream/opt/allocation/constraint_optimization/context.py` categorizes cores into compute, cache, and IO groups for the `ComputeAllocator`; and `AIE2Constraints.get_max_dma_channels()` applies different DMA channel limits per role.
+Roles drive the pipeline in several places: `GenericMappingGenerator._select_cores_for_node()` (in `stream/mapping/generic_generator.py`) has `_SKIP_TYPES = {"offchip", "shim"}` which excludes those roles from computation assignment; transfer-type classification treats `"offchip"` and `"shim"` cores as off-chip transfer endpoints (see the decision noted above); and `AIE2Constraints.get_max_dma_channels()` applies different DMA channel limits per role.
 
 ---
 

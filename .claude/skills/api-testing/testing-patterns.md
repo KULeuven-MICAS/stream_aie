@@ -73,14 +73,13 @@ This test file verifies that OR-Tools backends (GSCIP, HiGHS) produce objective 
 
 Backend patching is the cross-cutting technique for controlling which solver backend runs in tests without modifying API call sites or passing backend arguments through the test setup.
 
-### The Dual-Target Problem
+### The Import-Namespace Problem
 
-Both `ComputeAllocator` (in `stream/opt/allocation/constraint_optimization/allocation.py`) and `TransferAndTensorAllocator` (in `stream/opt/allocation/constraint_optimization/transfer_and_tensor_allocation.py`) import `create_solver` from `stream.opt.solver` into their own module namespace at import time. Because Python's `unittest.mock.patch` replaces the name in the target namespace rather than the definition in the source module, patching the source (`stream.opt.solver.create_solver`) does not affect the already-imported names in the allocator modules. Two separate patch targets are required:
+`TransferAndTensorAllocator` (in `stream/opt/allocation/constraint_optimization/transfer_and_tensor_allocation.py`) imports `create_solver` from `stream.opt.solver` into its own module namespace at import time. Because Python's `unittest.mock.patch` replaces the name in the target namespace rather than the definition in the source module, patching the source (`stream.opt.solver.create_solver`) does not affect the already-imported name in the allocator module. The patch must therefore target the importing module:
 
-- `stream.opt.allocation.constraint_optimization.allocation.create_solver`
 - `stream.opt.allocation.constraint_optimization.transfer_and_tensor_allocation.create_solver`
 
-Both patches must be active simultaneously during a test run to ensure both allocators use the injected backend.
+This patch must be active during a test run to ensure the allocator uses the injected backend.
 
 ### The Factory Replacement Pattern
 
@@ -92,7 +91,7 @@ When the pipeline is told to use a Gurobi backend (either directly or through th
 
 - `stream.api._sanity_check_gurobi_license`
 
-All three patches can be stacked using `with patch(...) as ..., patch(...) as ..., patch(...) as ...:` blocks or nested `with` statements.
+These patches can be stacked using a `with patch(...) as ..., patch(...) as ...:` block or nested `with` statements.
 
 ---
 

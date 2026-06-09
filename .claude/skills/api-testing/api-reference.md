@@ -2,13 +2,13 @@
 
 ## Overview
 
-stream_aie exposes two programmatic entry points: `optimize_allocation_co()` runs the constraint optimization (CO) pipeline for a single, fixed mapping, and `optimize_mapping()` runs the design space exploration (DSE) pipeline that generates multiple candidate mappings and evaluates each through the CO pipeline. Both functions are importable from `stream.api`. Ten CLI scripts wrap these entry points for common workloads and hardware configurations.
+stream_aie exposes two programmatic entry points: `optimize_allocation_co()` runs the constraint optimization (CO) pipeline for a single, fixed mapping, and `optimize_mapping()` runs the design space exploration (DSE) pipeline that generates multiple candidate mappings and evaluates each through the CO pipeline. Both functions are importable from `stream.api`. Several CLI scripts in `scripts/` wrap these entry points for common workloads and hardware configurations.
 
 ---
 
 ## optimize_allocation_co()
 
-Runs the full CO pipeline for a single hardware/workload/mapping triple. The pipeline stages are: parse accelerator, parse ONNX workload, parse mapping, generate tiling, estimate core costs, run MILP allocation (ComputeAllocator then TransferAndTensorAllocator), and estimate memory accesses. Optionally, an AIE code generation stage can be prepended.
+Runs the full CO pipeline for a single hardware/workload/mapping triple. The pipeline stages are: parse accelerator, parse ONNX workload, parse mapping, generate tiling, estimate core costs, run MILP allocation (TransferAndTensorAllocator), and estimate memory accesses. Optionally, an AIE code generation stage can be prepended.
 
 **AIE codegen prerequisite:** `enable_codegen=True` requires `pip install '.[aie]'` and `source setup_mlir_aie_pythonpath.sh` (Linux x86_64, Python 3.12/3.13).
 
@@ -156,20 +156,17 @@ def split_fusion_groups(self, cut_points: list[str] | None = None) -> list[Workl
 
 ## CLI Scripts
 
-All CLI scripts live at the repository root. Each calls either `optimize_allocation_co()` or `optimize_mapping()` with pre-configured hardware, workload, and mapping paths for a specific target.
+All CLI scripts live in `scripts/` and are run from the repository root. Each calls either `optimize_allocation_co()` or `optimize_mapping()` with pre-configured hardware, workload, and mapping paths for a specific target.
 
 | Script | Category | Purpose | Key Flags |
 |--------|----------|---------|-----------|
-| `main_gemm.py` | CO | Runs CO pipeline on a parameterized GEMM workload (M, K, N dimensions, tile sizes, data types) with AIE codegen enabled | `--M`, `--N`, `--K`, `--m`, `--k`, `--n`, `--in_dtype`, `--out_dtype`, `--rows`, `--cols`, `--npu`, `--backend`, `--disable-constraints` |
-| `main_aie_co.py` | CO | Runs CO pipeline on a fixed 1x1 convolution AIE workload; hardcoded paths and mode | None (config embedded in script) |
-| `main_stream_co.py` | CO | Runs CO pipeline on a ResNet-18 workload with a quad-core TPU-like accelerator | None (config embedded in script) |
-| `main_aie_ga.py` | GA | Runs genetic algorithm allocation on a fixed AIE 1x1 convolution workload; produces schedule and memory usage plots | None (config embedded in script) |
-| `main_stream_ga.py` | GA | Runs genetic algorithm allocation on ResNet-18 with a quad-core accelerator; produces memory plot and Perfetto trace | None (config embedded in script) |
-| `main_swiglu.py` | DSE | Runs CO pipeline (single mapping) on a parameterized SwiGLU workload with AIE codegen enabled | `--seq_len`, `--embedding_dim`, `--hidden_dim`, `--in_dtype`, `--out_dtype`, `--rows`, `--cols`, `--npu`, `--seq_len_tile_size`, `--embedding_tile_size`, `--hidden_tile_size`, `--no_last_gemm_down`, `--backend`, `--disable-constraints` |
-| `main_swiglu_dse.py` | DSE | Runs DSE pipeline (`optimize_mapping`) over all combinations of tile size values provided for seq_len, embedding, and hidden dimensions | `--seq_len`, `--embedding_dim`, `--hidden_dim`, `--seq_len_tile_size` (list), `--embedding_tile_size` (list), `--hidden_tile_size` (list), `--rows`, `--cols`, `--backend`, `--disable-constraints` |
-| `main_swiglu_dse_single.py` | DSE | Runs CO pipeline on SwiGLU with a single hardcoded mapping file from a prior DSE run | `--seq_len`, `--embedding_dim`, `--hidden_dim`, `--rows`, `--cols`, `--seq_len_tile_size`, `--embedding_tile_size`, `--hidden_tile_size`, `--no_last_gemm_down`, `--disable-constraints` |
-| `main_gemm_manual.py` | Specialized | Manual MLIR generation for GEMM without using the CO pipeline; uses xDSL compiler transforms directly | `--m_size`, `--n_size`, `--k_size` (hardcoded in script body) |
-| `main_aie_codegen_conv2d.py` | Specialized | Runs CO pipeline with AIE codegen on a parameterized 2D convolution workload using a single AIE tile | `--height` |
+| `scripts/main_gemm.py` | CO | Runs CO pipeline on a parameterized GEMM workload (M, K, N dimensions, tile sizes, data types) with AIE codegen enabled | `--M`, `--N`, `--K`, `--m`, `--k`, `--n`, `--in_dtype`, `--out_dtype`, `--rows`, `--cols`, `--npu`, `--backend`, `--disable-constraints` |
+| `scripts/main_aie_co.py` | CO | Runs CO pipeline on a fixed 1x1 convolution AIE workload; hardcoded paths and mode | None (config embedded in script) |
+| `scripts/main_stream_co.py` | CO | Runs CO pipeline on a ResNet-18 workload with a quad-core TPU-like accelerator | None (config embedded in script) |
+| `scripts/main_swiglu.py` | DSE | Runs CO pipeline (single mapping) on a parameterized SwiGLU workload with AIE codegen enabled | `--seq_len`, `--embedding_dim`, `--hidden_dim`, `--in_dtype`, `--out_dtype`, `--rows`, `--cols`, `--npu`, `--seq_len_tile_size`, `--embedding_tile_size`, `--hidden_tile_size`, `--no_last_gemm_down`, `--backend`, `--disable-constraints` |
+| `scripts/main_swiglu_dse.py` | DSE | Runs DSE pipeline (`optimize_mapping`) over all combinations of tile size values provided for seq_len, embedding, and hidden dimensions | `--seq_len`, `--embedding_dim`, `--hidden_dim`, `--seq_len_tile_size` (list), `--embedding_tile_size` (list), `--hidden_tile_size` (list), `--rows`, `--cols`, `--backend`, `--disable-constraints` |
+| `scripts/main_swiglu_dse_single.py` | DSE | Runs CO pipeline on SwiGLU with a single hardcoded mapping file from a prior DSE run | `--seq_len`, `--embedding_dim`, `--hidden_dim`, `--rows`, `--cols`, `--seq_len_tile_size`, `--embedding_tile_size`, `--hidden_tile_size`, `--no_last_gemm_down`, `--disable-constraints` |
+| `scripts/main_gemm_codegen.py` | Specialized | Direct GEMM->AIE MLIR generation via xDSL compiler transforms (no CO pipeline); asserts M%128, N%256, K%32 | `--M`, `--N`, `--K` (required); `--m`, `--k`, `--n`, `--in_dtype`, `--out_dtype`, `--rows`, `--cols`, `--npu`, `--trace_size` |
 
 ---
 

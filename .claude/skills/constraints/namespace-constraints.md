@@ -98,23 +98,6 @@ No changes to `TransferAndTensorAllocator` or `TransferAndTensorContext` are nee
 
 ---
 
-## ConstraintContext
-
-`ConstraintContext` is a separate frozen dataclass (also in `context.py`) used by `ComputeAllocator` — not `TransferAndTensorAllocator`. It organizes the core lists needed for the first MILP stage:
-
-- `core_profiles` — a mapping from each `Core` to its `CoreConstraintProfile`
-- `compute_cores` — cores eligible to run computation nodes
-- `cache_cores` — cores with the `CACHE` role
-- `io_cores` — cores with the `IO` or `SHIM` role
-- `capacities` — a mapping from compute cores to their memory capacity
-- `offchip_core_id` — the off-chip core ID, used to exclude DRAM from compute assignment
-
-The `core_ids()` method returns a sorted list of compute core IDs.
-
-`build_constraint_context(accelerator, cfg)` is the factory that constructs `ConstraintContext` by iterating over the accelerator's core list, assigning each core a `CoreConstraintProfile` from the configuration's profile registry, and categorizing cores by role.
-
----
-
 ## How the Layers Interact
 
 Constraint dispatch in `TransferAndTensorAllocator` operates through three levels of filtering:
@@ -143,5 +126,5 @@ See `.claude/skills/optimization/constraint-selection.md` for a full description
 ## See Also
 
 - `.claude/skills/optimization/constraint-selection.md` — `ConstraintSelection` dataclass, toggle-to-hardware mapping, and the coarse toggle layer that gates namespace dispatch
-- `.claude/skills/constraints/milp-formulation.md` — Full MILP structure for both `ComputeAllocator` and `TransferAndTensorAllocator`, including variable families and constraint groups
+- `.claude/skills/constraints/milp-formulation.md` — Full MILP structure for `TransferAndTensorAllocator`, including variable families and constraint groups
 - `.claude/skills/optimization/solver-backends.md` — The `SolverModel` interface used by constraint methods when adding constraints to the model
