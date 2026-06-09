@@ -69,6 +69,17 @@ Concerned with code generation: node-to-core mapping, tiling, transfer routing, 
 - `AcceleratorIR.compiler_view()` — core topology (id, type, row/col position) and connectivity. Use for placement decisions without type-specific resource noise.
 - `AllocationIR.compiler_view()` — per-node inter-core tiling and resource mapping, fused groups with intra-core tiling, runtime args for code generation. Use to drive MLIR code generation.
 
+### Performance Engineer
+
+Concerned with *where the latency goes* — whether a schedule is compute-bound, transfer/DMA-bound, or simply under-utilized. This is the view to read when a result is surprising (e.g. adding cores doesn't change latency), instead of reading `latency.total` alone.
+
+- `AllocationIR.performance_view()` — returns `AllocationPerformanceView` (or `None` if stats weren't captured). Read-only summary derived from the cost LUT + solved slot latencies; it never changes the cost model. Look at:
+  - `bottleneck` — per-iteration latency split into `compute_bound` vs `transfer_bound` cycles (and `%`). Tells you the resource class that sets the latency.
+  - `aggregate.latency_weighted_mac_spatial_utilization` (1.0 = full PE arrays) and `compute_cores_used` vs `compute_cores_available` — exposes idle compute capacity.
+  - `nodes[name]` — per compute node: `n_cores` (inter-core spread), `latency_cycles`, `ideal_compute_cycles`, `mac_spatial_utilization`, and `compute_efficiency` (= ideal / actual).
+
+**How to diagnose with it:** low `mac_spatial_utilization` ⇒ the per-core spatial (PE-array) mapping is the bottleneck (intra-core under-utilization). Identical per-node `latency_cycles` across two hardware variants with different `n_cores` ⇒ inter-core tiling isn't reducing latency (compare two runs). High `transfer_bound_pct` ⇒ DMA/NoC bound. These are *observational* — they reveal cost-model behaviour; never change the cost model to "fix" a number without confirming the modelling intent.
+
 ## Anti-Patterns
 
 Do not bring `stream.ir` into `stream/workload/`, `stream/mapping/`, or `stream/cost_model/`. The IR package depends on internal classes (guarded by TYPE_CHECKING) — not the reverse. A reverse dependency creates circular imports.
