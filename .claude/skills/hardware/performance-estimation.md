@@ -12,15 +12,19 @@ See `.claude/skills/pipeline/` for the full stage order and how `StageContext` c
 
 `CoreCostEntry` (`stream/cost_model/core_cost.py`, dataclass) is what every estimator returns. All fields:
 
+- `energy_total` — energy estimate; currently `0.0` for the AIE path (marked TODO).
 - `latency_total` — the primary latency cost used by the MILP for scheduling.
 - `ideal_cycle` — theoretical minimum cycles (no memory bottleneck).
 - `ideal_temporal_cycle` — ideal cycles including temporal mapping overhead.
-- `energy_total` — energy estimate; currently `0.0` for the AIE path (marked TODO).
+- `mem_energy_breakdown` — per-memory energy breakdown dict from the ZigZag CME; empty `{}` for the AIE and fallback paths.
 - `cme` — the raw `CostModelEvaluation` from ZigZag, or `None` for the AIE and fallback paths.
-- `mapping` — the chosen temporal mapping; `None` for the AIE path.
+- `mapping` — the chosen temporal mapping; `None` for the AIE and fallback paths.
+- `layer` — the source `ComputationNode` this entry was estimated for.
 - `metadata` — an estimator-specific dict (e.g. `{"utilization": 95}`) for debugging.
 
 Every estimator returns this type — it is the shared contract that makes the LUT estimator-agnostic.
+
+**CME attribute delegation.** `CoreCostEntry.__getattr__` forwards any unknown attribute read to the underlying `cme` when present. This is how the performance-stats builder reads CME-only metrics — e.g. `mac_spatial_utilization`, `latency_total2` — straight off a `CoreCostEntry`. For AIE and fallback entries (`cme is None`) those reads raise `AttributeError`, so callers use `getattr(entry, name, None)` and get `None` for AIE/fallback nodes. (`get_cycles_scaled(utilization)` rescales `latency_total` by a utilization percentage.)
 
 ---
 
@@ -59,12 +63,12 @@ The AIE estimator does **not** use ZigZag. It requires the mapping to carry a `k
 `ZigZagCostEstimator` (`stream/stages/estimation/zigzag_cost_estimator.py`, dataclass) is used for all non-AIE-compute cores — every `zigzag.*` core and any `aie2.*` core that is not of kind `"compute"`.
 
 Estimation logic:
-1. Build a `ZigZagLayerNode` from the `ComputationNode`, converting Stream's dimension/affine mapping representation into ZigZag's layer-equation format.
-2. Instantiate a ZigZag `MainStage` pipeline: `SpatialMappingGeneratorStage → MinimalLatencyStage → TemporalMappingGeneratorStage → CostModelStage`.
+1. **Build a `ZigZagLayerNode` at per-core tile size.** Convert the `ComputationNode`'s dimension/affine mapping into ZigZag's layer-equation format, and shrink each inter-core-tiled dimension to the size a single core actually computes. `_inter_core_factors(node)` reads the total inter-core split factor per dimension from the mapping; `_per_core_size(full, factor)` divides the full dimension size by that factor when it divides evenly (otherwise leaves it unchanged — never a 0 or partial extent). This per-core shrink is applied consistently to **both** the ZigZag `layer_dim_sizes` (`create_layer_dim_sizes`) and the PR/affine tensor extents (`create_equation_and_dimension_relations_and_padding_and_pr_sizes`), so ZigZag costs the per-core tile of a layer-fused mapping, not the full layer. (The AIE estimator does the analogous thing by dividing MACs by the inter-core tiling factor.)
+2. Instantiate a ZigZag `MainStage` pipeline: `MinimalLatencyStage → SpatialMappingGeneratorStage → MinimalLatencyStage → TemporalMappingGeneratorStage → CostModelStage` (the two `MinimalLatencyStage`s reduce, respectively, the final CMEs and the generated spatial mappings to the minimal-latency choice).
 3. Pass `core.to_zigzag_core()` — the inner `ZigZagCoreBackend` — as the accelerator. This is why ZigZag-backed cores are required for this estimator path.
 4. Run the ZigZag pipeline; receive a `CostModelEvaluation`.
 5. Apply `increase_cc_per_op()` for special operations: silu, sigmoid, and exp cost 4 cycles per operation (default: 1 cycle per operation).
-6. Return `CoreCostEntry` with `latency_total = cme.latency_total2`.
+6. Return `CoreCostEntry` with `latency_total = cme.latency_total2` (falling back to `cme.ideal_cycle` if absent), plus `ideal_cycle`, `ideal_temporal_cycle`, `mem_energy_breakdown`, and the raw `cme`.
 
 A detail: `get_memory_operand_links()` uses `assert len(memory_operands) >= len(node.tensors)` (relaxed from `==`). This accommodates pooling cores that have extra memory operands (`I1/I2/O`) for operations that use fewer than three tensors.
 
@@ -78,7 +82,7 @@ If `run_zigzag()` raises any exception — most commonly a spatial-mapping-gener
 ideal_cycle = product of all layer_dim_sizes values
 ```
 
-The fallback is logged at WARNING level. The resulting `CoreCostEntry` has `energy_total=0`, `cme=None`, and `mapping=None`. This behavior is a documented project decision (PROJECT.md): "ZigZag fallback uses product of layer_dim_sizes as ideal-cycle estimate when spatial mapping generation crashes." The fallback fires on **any** exception from `run_zigzag()`, not only spatial-mapping errors.
+These `layer_dim_sizes` are the per-core tile sizes from step 1, so the fallback estimate is the per-core MAC count, consistent with the non-fallback path. The fallback is logged at WARNING level. The resulting `CoreCostEntry` has `energy_total=0`, `cme=None`, and `mapping=None`. This behavior is a documented project decision (PROJECT.md): "ZigZag fallback uses product of layer_dim_sizes as ideal-cycle estimate when spatial mapping generation crashes." The fallback fires on **any** exception from `run_zigzag()`, not only spatial-mapping errors.
 
 ---
 
