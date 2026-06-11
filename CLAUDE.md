@@ -18,7 +18,9 @@ stream_aie/
 │   ├── cost_model/                     # Scheduling, cost evaluation, communication
 │   ├── hardware/                       # Hardware architecture model
 │   ├── inputs/                         # Hardware YAML, mapping YAML, workload generators
+│   ├── ir/                             # Typed IR models (WorkloadIR, AllocationIR, AcceleratorIR)
 │   ├── mapping/                        # Mapping data model and DSE variant generation
+│   ├── mcp/                            # MCP server (stream-aie) exposing CO jobs to AI agents
 │   ├── opt/
 │   │   ├── allocation/
 │   │   │   └── constraint_optimization/   # MILP-based allocation
@@ -47,14 +49,16 @@ stream_aie/
 - `scripts/main_swiglu.py` -- SwiGLU workload: constraint optimization allocation + optional AIE codegen
 - `scripts/main_swiglu_dse_single.py` -- Single-mapping SwiGLU design space evaluation
 - `scripts/main_swiglu_dse.py` -- Multi-mapping SwiGLU design space exploration
-- `scripts/main_aie_co.py`, `scripts/main_stream_co.py` -- Additional workload variants
+- `scripts/main_stream_co.py` -- General-purpose CO pipeline for any ONNX workload + hardware (non-AIE); manual or auto-generated mapping
+- `scripts/main_aie_co.py` -- CO allocation for a hard-coded single AIE tile workload
 - `scripts/main_gemm_codegen.py` -- Direct GEMM AIE MLIR codegen (xDSL transforms, no CO pipeline)
 - `scripts/analysis/` -- plotting (`plot_*.py`) and trace post-processing (`postprocess_*.py`) utilities
 
 Scripts import `stream` as an installed package (`pip install -e .`); run them from the repo root so relative input paths (e.g. `stream/inputs/...`) resolve.
 
 **Public API (`stream/api.py`):**
-- `optimize_allocation_co(hardware, workload, mapping, ...)` -- Full CO pipeline: parse -> tile -> cost -> MILP -> memory estimation
+- `optimize_allocation_co_generic(hardware, workload, ...)` -- Primary entry point: auto-generates the mapping, then runs the full CO pipeline (parse -> tile -> cost -> MILP -> memory estimation)
+- `optimize_allocation_co_with_mapping(hardware, workload, mapping, ...)` -- CO pipeline with a hand-written mapping (`optimize_allocation_co` is a backward-compatible alias)
 - `optimize_mapping(hardware, workload, ...)` -- DSE pipeline: enumerate mappings, run CO for each
 
 ## Coding Conventions
@@ -84,3 +88,4 @@ Deep-dive documentation for specific subsystems lives in `.claude/skills/`. Each
 - `.claude/skills/constraints/` -- MILP formulation, TransferAndTensorAllocator, NamespaceConstraints dispatch
 - `.claude/skills/api-testing/` -- Public API reference, CLI flags, testing patterns and conventions
 - `.claude/skills/hardware/` -- Hardware core model (roles, namespaces, AIE/TPU-like examples), per-core performance estimation
+- `.claude/skills/ir/` -- IR models (WorkloadIR, AllocationIR, AcceleratorIR), JSON serialization and persona views
