@@ -4,7 +4,7 @@
 
 `stream/ir/` is a Pydantic layer over the internal `get_ir()` dict methods on workload, accelerator, and scheduler objects. It adds a schema contract, construction-time validation, and JSON Schema generation (`model_json_schema()`) on top of data that already exists inside stream_aie's internal pipeline.
 
-The IR package is independent of MCP — any serialization path (REST, file, MCP tool response) can consume it. It does not add new data; it wraps and structures what `get_ir()` already returns.
+The IR package is independent of MCP - any serialization path (REST, file, MCP tool response) can consume it. It does not add new data; it wraps and structures what `get_ir()` already returns.
 
 ## The Three IR Classes
 
@@ -24,9 +24,9 @@ Wraps `SteadyStateScheduler.get_ir()`, which embeds `Mapping.get_ir()`. Describe
 
 Always use `from_internal(obj)`. Never construct IR classes directly from external code.
 
-- `WorkloadIR.from_internal(workload)` — call on a `Workload` object
-- `AcceleratorIR.from_internal(accelerator)` — call on an `Accelerator` object
-- `AllocationIR.from_internal(scheduler)` — call on a **post-solve** `SteadyStateScheduler`
+- `WorkloadIR.from_internal(workload)` - call on a `Workload` object
+- `AcceleratorIR.from_internal(accelerator)` - call on an `Accelerator` object
+- `AllocationIR.from_internal(scheduler)` - call on a **post-solve** `SteadyStateScheduler`
 
 `AllocationIR.from_internal()` raises `ValueError` if the scheduler has not been solved (latency_total sentinel == -1). Always check that `scheduler.run()` completed before calling it.
 
@@ -34,21 +34,21 @@ Always use `from_internal(obj)`. Never construct IR classes directly from extern
 
 Every IR model carries `schema_version: Literal['1.0']` which generates `"const": "1.0"` in the JSON Schema output. Rules:
 
-- Minor bump (1.1): additive fields only — old consumers continue to work
-- Major bump (2.0): removed or renamed fields — consumers must update
+- Minor bump (1.1): additive fields only - old consumers continue to work
+- Major bump (2.0): removed or renamed fields - consumers must update
 
 No migration infrastructure at this stage. Schema version is tracked per IR model independently.
 
 ## Per-Persona Views
 
-Every IR model exposes view methods that return lightweight Pydantic projection models. Views do not call `get_ir()` again — they project from the already-validated IR fields. Every view also carries `schema_version`.
+Every IR model exposes view methods that return lightweight Pydantic projection models. Views do not call `get_ir()` again - they project from the already-validated IR fields. Every view also carries `schema_version`.
 
 ### Algorithmic Engineer
 
 Concerned with workload shape, schedule quality, and solver configuration.
 
-- `WorkloadIR.algorithmic_view()` — node and edge counts, unique dimension count, dimension expressions. Use to understand workload size and structure.
-- `AllocationIR.algorithmic_view()` — full latency metrics (total, per-iteration, overlap), solver backend, constraint selection flags, fusion splits. Use to evaluate schedule quality and solver behaviour.
+- `WorkloadIR.algorithmic_view()` - node and edge counts, unique dimension count, dimension expressions. Use to understand workload size and structure.
+- `AllocationIR.algorithmic_view()` - full latency metrics (total, per-iteration, overlap), solver backend, constraint selection flags, fusion splits. Use to evaluate schedule quality and solver behaviour.
 
 AcceleratorIR has no algorithmic view; hardware topology is hardware-engineer territory.
 
@@ -56,8 +56,8 @@ AcceleratorIR has no algorithmic view; hardware topology is hardware-engineer te
 
 Concerned with physical resource usage, memory capacity, and connectivity.
 
-- `AcceleratorIR.hardware_view()` — all cores with their type-specific resource data (memory capacity, FIFO depth for aie2; operational array for zigzag), utilization, and full bus/link connectivity. Use to audit resource budgets.
-- `AllocationIR.hardware_view()` — per-node resource allocation (which cores or paths are used per slot) and memory allocation (which core IDs hold each tensor). Use to understand physical resource usage after scheduling.
+- `AcceleratorIR.hardware_view()` - all cores with their type-specific resource data (memory capacity, FIFO depth for aie2; operational array for zigzag), utilization, and full bus/link connectivity. Use to audit resource budgets.
+- `AllocationIR.hardware_view()` - per-node resource allocation (which cores or paths are used per slot) and memory allocation (which core IDs hold each tensor). Use to understand physical resource usage after scheduling.
 
 WorkloadIR has no hardware view; the workload graph is algorithm-level.
 
@@ -65,24 +65,24 @@ WorkloadIR has no hardware view; the workload graph is algorithm-level.
 
 Concerned with code generation: node-to-core mapping, tiling, transfer routing, fused groups.
 
-- `WorkloadIR.compiler_view()` — full node list (types, dimensions, tensor operands), DAG edges, tensor metadata, and generation (timeslot) assignments. Use for placement and routing decisions.
-- `AcceleratorIR.compiler_view()` — core topology (id, type, row/col position) and connectivity. Use for placement decisions without type-specific resource noise.
-- `AllocationIR.compiler_view()` — per-node inter-core tiling and resource mapping, fused groups with intra-core tiling, runtime args for code generation. Use to drive MLIR code generation.
+- `WorkloadIR.compiler_view()` - full node list (types, dimensions, tensor operands), DAG edges, tensor metadata, and generation (timeslot) assignments. Use for placement and routing decisions.
+- `AcceleratorIR.compiler_view()` - core topology (id, type, row/col position) and connectivity. Use for placement decisions without type-specific resource noise.
+- `AllocationIR.compiler_view()` - per-node inter-core tiling and resource mapping, fused groups with intra-core tiling, runtime args for code generation. Use to drive MLIR code generation.
 
 ### Performance Engineer
 
-Concerned with *where the latency goes* — whether a schedule is compute-bound, transfer/DMA-bound, or simply under-utilized. This is the view to read when a result is surprising (e.g. adding cores doesn't change latency), instead of reading `latency.total` alone.
+Concerned with *where the latency goes* - whether a schedule is compute-bound, transfer/DMA-bound, or simply under-utilized. This is the view to read when a result is surprising (e.g. adding cores doesn't change latency), instead of reading `latency.total` alone.
 
-- `AllocationIR.performance_view()` — returns `AllocationPerformanceView` (or `None` if stats weren't captured). Read-only summary derived from the cost LUT + solved slot latencies; it never changes the cost model. Look at:
-  - `bottleneck` — per-iteration latency split into `compute_bound` vs `transfer_bound` cycles (and `%`). Tells you the resource class that sets the latency.
-  - `aggregate.latency_weighted_mac_spatial_utilization` (1.0 = full PE arrays) and `compute_cores_used` vs `compute_cores_available` — exposes idle compute capacity.
-  - `nodes[name]` — per compute node: `n_cores` (inter-core spread), `latency_cycles`, `ideal_compute_cycles`, `mac_spatial_utilization`, and `compute_efficiency` (= ideal / actual).
+- `AllocationIR.performance_view()` - returns `AllocationPerformanceView` (or `None` if stats weren't captured). Read-only summary derived from the cost LUT + solved slot latencies; it never changes the cost model. Look at:
+  - `bottleneck` - per-iteration latency split into `compute_bound` vs `transfer_bound` cycles (and `%`). Tells you the resource class that sets the latency.
+  - `aggregate.latency_weighted_mac_spatial_utilization` (1.0 = full PE arrays) and `compute_cores_used` vs `compute_cores_available` - exposes idle compute capacity.
+  - `nodes[name]` - per compute node: `n_cores` (inter-core spread), `latency_cycles`, `ideal_compute_cycles`, `mac_spatial_utilization`, and `compute_efficiency` (= ideal / actual).
 
-**How to diagnose with it:** low `mac_spatial_utilization` ⇒ the per-core spatial (PE-array) mapping is the bottleneck (intra-core under-utilization). Identical per-node `latency_cycles` across two hardware variants with different `n_cores` ⇒ inter-core tiling isn't reducing latency (compare two runs). High `transfer_bound_pct` ⇒ DMA/NoC bound. These are *observational* — they reveal cost-model behaviour; never change the cost model to "fix" a number without confirming the modelling intent.
+**How to diagnose with it:** low `mac_spatial_utilization` ⇒ the per-core spatial (PE-array) mapping is the bottleneck (intra-core under-utilization). Identical per-node `latency_cycles` across two hardware variants with different `n_cores` ⇒ inter-core tiling isn't reducing latency (compare two runs). High `transfer_bound_pct` ⇒ DMA/NoC bound. These are *observational* - they reveal cost-model behaviour; never change the cost model to "fix" a number without confirming the modelling intent.
 
 ## Anti-Patterns
 
-Do not bring `stream.ir` into `stream/workload/`, `stream/mapping/`, or `stream/cost_model/`. The IR package depends on internal classes (guarded by TYPE_CHECKING) — not the reverse. A reverse dependency creates circular imports.
+Do not bring `stream.ir` into `stream/workload/`, `stream/mapping/`, or `stream/cost_model/`. The IR package depends on internal classes (guarded by TYPE_CHECKING) - not the reverse. A reverse dependency creates circular imports.
 
 Do not call `get_ir()` directly in view methods or construct IR instances without `from_internal()`. The `from_internal()` classmethod is the single validated entry point.
 

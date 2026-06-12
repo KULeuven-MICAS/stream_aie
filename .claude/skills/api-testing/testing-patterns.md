@@ -10,13 +10,13 @@ The test suite uses pytest with no custom conftest. Tests are organized into fou
 
 The repository's test layout is:
 
-`tests/unit/` — Six files testing individual components in isolation. Each file corresponds to a specific subsystem: `test_solver_facade.py` (solver abstraction layer), `test_constraint_selection.py` (ConstraintSelection dataclass), `test_linearization.py` (piecewise linearization for division encoding), `test_ortools_backend.py` (OR-Tools backend-specific behavior), `test_pipeline_threading.py` (API and stage pipeline threading of the constraint_selection parameter), and `test_no_gurobipy_leakage.py` (verifies that gurobipy is not imported when the OR-Tools backend is used).
+`tests/unit/` - Six files testing individual components in isolation. Each file corresponds to a specific subsystem: `test_solver_facade.py` (solver abstraction layer), `test_constraint_selection.py` (ConstraintSelection dataclass), `test_linearization.py` (piecewise linearization for division encoding), `test_ortools_backend.py` (OR-Tools backend-specific behavior), `test_pipeline_threading.py` (API and stage pipeline threading of the constraint_selection parameter), and `test_no_gurobipy_leakage.py` (verifies that gurobipy is not imported when the OR-Tools backend is used).
 
-`tests/integration/` — Two files that run the full pipeline against real YAML and ONNX inputs. `test_constraint_toggles.py` verifies that each constraint group's guard is structurally effective. `test_cross_backend.py` verifies that OR-Tools and Gurobi backends produce equivalent objectives within tolerance.
+`tests/integration/` - Two files that run the full pipeline against real YAML and ONNX inputs. `test_constraint_toggles.py` verifies that each constraint group's guard is structurally effective. `test_cross_backend.py` verifies that OR-Tools and Gurobi backends produce equivalent objectives within tolerance.
 
-`tests/` root — Three pytest files for broader concerns: `test_accelerator_ir.py` (parametrized tests for accelerator IR parsing), `test_core_cost_lut_caching.py` (stub-stage caching behavior for core cost LUT), and `test_core_validation.py` (core attribute validation).
+`tests/` root - Three pytest files for broader concerns: `test_accelerator_ir.py` (parametrized tests for accelerator IR parsing), `test_core_cost_lut_caching.py` (stub-stage caching behavior for core cost LUT), and `test_core_validation.py` (core attribute validation).
 
-`tests/` standalone scripts — Four Python scripts that are not pytest tests: `study_constraint_toggles.py`, `study_constraint_toggles_cross_backend.py`, `study_swiglu_backends.py`, and `verify_backends.py`. These are run directly with Python. See the Study and Verification Scripts section for details.
+`tests/` standalone scripts - Four Python scripts that are not pytest tests: `study_constraint_toggles.py`, `study_constraint_toggles_cross_backend.py`, `study_swiglu_backends.py`, and `verify_backends.py`. These are run directly with Python. See the Study and Verification Scripts section for details.
 
 ---
 
@@ -28,7 +28,7 @@ To run all unit tests: `pytest tests/unit/ -x`
 
 ### Naming Conventions
 
-Test files are named `test_*.py`. Test functions are named `test_*`. No test classes are used — all tests are module-level functions. Module-level helper functions that are not tests use a single underscore prefix (e.g., `_trivial_model()`, `_run_gemm()`), which prevents pytest from collecting them as tests.
+Test files are named `test_*.py`. Test functions are named `test_*`. No test classes are used - all tests are module-level functions. Module-level helper functions that are not tests use a single underscore prefix (e.g., `_trivial_model()`, `_run_gemm()`), which prevents pytest from collecting them as tests.
 
 ### Common Patterns
 
@@ -57,13 +57,13 @@ To run all integration tests: `pytest tests/integration/ -x`
 
 Integration tests require real hardware YAML files (e.g., `stream/inputs/aie/hardware/whole_array_strix.yaml`) and real ONNX workloads (generated in-memory for GEMM and SwiGLU by `make_gemm_workload()` and `make_swiglu_workload()`).
 
-### test_constraint_toggles.py — Infeasibility-Flip Pattern
+### test_constraint_toggles.py - Infeasibility-Flip Pattern
 
 This test file verifies that each of the four constraint groups is structurally effective: when a hardware resource limit is set to exactly the minimum value that makes the problem infeasible under the constraint, enabling the constraint produces a `RuntimeError` and disabling it produces a successful solve. This pattern is called the infeasibility-flip test.
 
-For each constraint group, the test creates a tight hardware configuration (e.g., memory capacity set to a value that the GEMM workload cannot satisfy), runs the optimizer twice — once with the constraint enabled, once with it disabled — and asserts the expected outcomes.
+For each constraint group, the test creates a tight hardware configuration (e.g., memory capacity set to a value that the GEMM workload cannot satisfy), runs the optimizer twice - once with the constraint enabled, once with it disabled - and asserts the expected outcomes.
 
-### test_cross_backend.py — Cross-Backend Parity
+### test_cross_backend.py - Cross-Backend Parity
 
 This test file verifies that OR-Tools backends (GSCIP, HiGHS) produce objective values within 1% of the established Gurobi baseline. The baseline objectives for GEMM (48,730,630) and SwiGLU (9,396,485) were verified during Phase 1 development. Tests in this file use backend patching to inject OR-Tools solvers while keeping the rest of the pipeline identical to a Gurobi run.
 
@@ -126,6 +126,6 @@ If a new constraint group is added to `ConstraintSelection`, the infeasibility-f
 
 ## See Also
 
-- `.claude/skills/optimization/solver-backends.md` — `SolverBackend` enum values, `ORToolsBackend` and `GurobiBackend` construction details for the factory replacement pattern
-- `.claude/skills/optimization/constraint-selection.md` — `ConstraintSelection` dataclass fields and constraint group semantics for writing infeasibility-flip tests
-- `.claude/skills/api-testing/api-reference.md` — `optimize_allocation_co()` and `optimize_mapping()` signatures that the integration tests exercise
+- `.claude/skills/optimization/solver-backends.md` - `SolverBackend` enum values, `ORToolsBackend` and `GurobiBackend` construction details for the factory replacement pattern
+- `.claude/skills/optimization/constraint-selection.md` - `ConstraintSelection` dataclass fields and constraint group semantics for writing infeasibility-flip tests
+- `.claude/skills/api-testing/api-reference.md` - `optimize_allocation_co()` and `optimize_mapping()` signatures that the integration tests exercise

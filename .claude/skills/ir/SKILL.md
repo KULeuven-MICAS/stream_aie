@@ -10,7 +10,7 @@ description: Use when working with IR models (WorkloadIR, AllocationIR, Accelera
 Use when:
 - Constructing WorkloadIR, AllocationIR, or AcceleratorIR from internal stream_aie objects
 - Choosing which persona view to return (algorithmic, hardware, compiler, or performance)
-- Diagnosing why a schedule has the latency it does (compute- vs transfer-bound, PE-array under-utilization) via `AllocationIR.performance_view()` — read this instead of `latency.total` alone when a result is surprising
+- Diagnosing why a schedule has the latency it does (compute- vs transfer-bound, PE-array under-utilization) via `AllocationIR.performance_view()` - read this instead of `latency.total` alone when a result is surprising
 - Serializing schedule results to JSON Schema-validated structures
 - Building MCP tool responses that expose IR data to AI agents
 - Understanding which fields are available per IR class and per view

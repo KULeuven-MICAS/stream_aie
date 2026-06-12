@@ -8,7 +8,7 @@ The constraint selection system controls which hardware-resource constraint grou
 
 ## ConstraintSelection Dataclass
 
-`ConstraintSelection` is a frozen dataclass defined in `stream/opt/solver/solver.py`. It has four boolean fields, all defaulting to `True` (fully constrained). Setting a field to `False` skips that entire constraint group — no variables are created, no constraints are added, and for `dma_channels`, the associated objective terms are also omitted.
+`ConstraintSelection` is a frozen dataclass defined in `stream/opt/solver/solver.py`. It has four boolean fields, all defaulting to `True` (fully constrained). Setting a field to `False` skips that entire constraint group - no variables are created, no constraints are added, and for `dma_channels`, the associated objective terms are also omitted.
 
 Because it is a frozen dataclass, instances are immutable once created. The default `ConstraintSelection()` constructor produces a fully-constrained configuration.
 
@@ -27,7 +27,7 @@ Because it is a frozen dataclass, instances are immutable once created. The defa
 
 ## Nonsensical Combination Warning
 
-`ConstraintSelection.__post_init__` checks for the combination `memory_capacity=False` with `object_fifo_depth=True` and emits a `WARNING` log message. This combination is nonsensical because object-FIFO depth constraints assume memory capacity is enforced — without memory capacity bounds, FIFO depth limits become meaningless as a resource guard. The solver continues regardless; it is a warning, not an error. The warning text explicitly states the reason: FIFO depth constraints assume memory capacity is enforced.
+`ConstraintSelection.__post_init__` checks for the combination `memory_capacity=False` with `object_fifo_depth=True` and emits a `WARNING` log message. This combination is nonsensical because object-FIFO depth constraints assume memory capacity is enforced - without memory capacity bounds, FIFO depth limits become meaningless as a resource guard. The solver continues regardless; it is a warning, not an error. The warning text explicitly states the reason: FIFO depth constraints assume memory capacity is enforced.
 
 ---
 
@@ -47,11 +47,11 @@ This design keeps the default behavior safe (all constraints active) while allow
 
 `NamespaceConstraints` is the base class for hardware-specific MILP constraint dispatch, defined in `context.py`. Each subclass targets one hardware namespace:
 
-- `NAMESPACE` — a class-level string attribute identifying the hardware namespace (e.g. `"aie2"`).
-- `applies_to(core)` — returns `True` if `core.namespace == self.NAMESPACE`. Used to filter cores inside constraint methods.
-- `add_object_fifo_constraints(model, object_fifo_depth)` — enforces FIFO depth limits; no-op in the base class.
-- `add_buffer_descriptor_constraints(model, buffer_descriptor_depth)` — enforces buffer descriptor limits; no-op in the base class.
-- `add_dma_usage_constraints(model, dma_usage_in, dma_usage_out)` — enforces DMA channel limits; returns an empty list in the base class.
+- `NAMESPACE` - a class-level string attribute identifying the hardware namespace (e.g. `"aie2"`).
+- `applies_to(core)` - returns `True` if `core.namespace == self.NAMESPACE`. Used to filter cores inside constraint methods.
+- `add_object_fifo_constraints(model, object_fifo_depth)` - enforces FIFO depth limits; no-op in the base class.
+- `add_buffer_descriptor_constraints(model, buffer_descriptor_depth)` - enforces buffer descriptor limits; no-op in the base class.
+- `add_dma_usage_constraints(model, dma_usage_in, dma_usage_out)` - enforces DMA channel limits; returns an empty list in the base class.
 
 Subclasses override only the methods relevant to their hardware. Methods left unoverridden remain no-ops, so only the constraints that apply to a given namespace are ever emitted. This is a strategy pattern: each hardware namespace provides its own constraint logic without modifying the allocator.
 
@@ -83,11 +83,11 @@ These defaults are passed as constructor parameters to `AIE2Constraints` and can
 
 Three dispatch methods iterate over `namespace_constraints` and call the corresponding method on each strategy:
 
-- `add_object_fifo_constraints(model, object_fifo_depth)` — calls each namespace's FIFO constraint method.
-- `add_buffer_descriptor_constraints(model, buffer_descriptor_depth)` — calls each namespace's buffer descriptor constraint method.
-- `add_dma_usage_constraints(model, dma_usage_in, dma_usage_out)` — calls each namespace's DMA constraint method.
+- `add_object_fifo_constraints(model, object_fifo_depth)` - calls each namespace's FIFO constraint method.
+- `add_buffer_descriptor_constraints(model, buffer_descriptor_depth)` - calls each namespace's buffer descriptor constraint method.
+- `add_dma_usage_constraints(model, dma_usage_in, dma_usage_out)` - calls each namespace's DMA constraint method.
 
-The `build_transfer_context()` factory function constructs the context. It scans the accelerator's core list for known namespace strings and instantiates the appropriate `NamespaceConstraints` subclass. Currently only `"aie2"` is recognized — if the accelerator has any `aie2` cores, an `AIE2Constraints` instance is added. Future namespaces follow the same pattern: add a subclass, detect the namespace string in `build_transfer_context()`, and append the instance.
+The `build_transfer_context()` factory function constructs the context. It scans the accelerator's core list for known namespace strings and instantiates the appropriate `NamespaceConstraints` subclass. Currently only `"aie2"` is recognized - if the accelerator has any `aie2` cores, an `AIE2Constraints` instance is added. Future namespaces follow the same pattern: add a subclass, detect the namespace string in `build_transfer_context()`, and append the instance.
 
 ---
 
@@ -95,7 +95,7 @@ The `build_transfer_context()` factory function constructs the context. It scans
 
 The two layers form a clean separation of concerns:
 
-`ConstraintSelection` is the **coarse toggle**: it decides whether a constraint group runs at all. It is hardware-agnostic and lives at the API boundary. When a field is `False`, the allocator skips the entire group — no namespace dispatch occurs for that group.
+`ConstraintSelection` is the **coarse toggle**: it decides whether a constraint group runs at all. It is hardware-agnostic and lives at the API boundary. When a field is `False`, the allocator skips the entire group - no namespace dispatch occurs for that group.
 
 `NamespaceConstraints` is the **fine-grained dispatch**: it decides how constraints are applied for a specific hardware target. It is hardware-aware and lives inside the context. When a constraint group is enabled (field is `True`), the allocator calls `TransferAndTensorContext`'s dispatch method, which delegates to each namespace strategy in `namespace_constraints`.
 

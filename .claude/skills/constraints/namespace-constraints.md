@@ -2,7 +2,7 @@
 
 ## Overview
 
-The namespace constraints system provides hardware-specific MILP constraint dispatch using the Strategy pattern. A `NamespaceConstraints` base class defines three overridable constraint methods covering object-FIFO depth, buffer descriptors, and DMA channels. Each hardware namespace — for example, AMD AIE2 — provides a concrete subclass that overrides the methods relevant to its resource limits. The `TransferAndTensorContext` holds a tuple of namespace strategy instances and dispatches constraint calls to all of them. This design separates hardware-specific resource limits from the generic MILP formulation in `TransferAndTensorAllocator`, so adding support for a new hardware target requires no changes to the allocator itself. Source: `stream/opt/allocation/constraint_optimization/context.py`.
+The namespace constraints system provides hardware-specific MILP constraint dispatch using the Strategy pattern. A `NamespaceConstraints` base class defines three overridable constraint methods covering object-FIFO depth, buffer descriptors, and DMA channels. Each hardware namespace - for example, AMD AIE2 - provides a concrete subclass that overrides the methods relevant to its resource limits. The `TransferAndTensorContext` holds a tuple of namespace strategy instances and dispatches constraint calls to all of them. This design separates hardware-specific resource limits from the generic MILP formulation in `TransferAndTensorAllocator`, so adding support for a new hardware target requires no changes to the allocator itself. Source: `stream/opt/allocation/constraint_optimization/context.py`.
 
 ---
 
@@ -10,7 +10,7 @@ The namespace constraints system provides hardware-specific MILP constraint disp
 
 `NamespaceConstraints` is the base class for all hardware-specific constraint strategies.
 
-`NAMESPACE` is a class-level string attribute identifying the hardware namespace this strategy targets — for example, `"aie2"`. It is used by `applies_to()` to filter cores.
+`NAMESPACE` is a class-level string attribute identifying the hardware namespace this strategy targets - for example, `"aie2"`. It is used by `applies_to()` to filter cores.
 
 `applies_to(core)` returns `True` if `core.namespace == self.NAMESPACE`. Constraint methods use this check to iterate only over cores belonging to this namespace, ignoring cores that belong to other namespaces or have no namespace set.
 
@@ -22,7 +22,7 @@ The base class defines three overridable constraint methods, all implemented as 
 
 - `add_dma_usage_constraints(model, dma_usage_in, dma_usage_out)`: enforces per-core DMA channel limits in both directions. Parameters are the solver model and two dictionaries mapping `Core` objects to their accumulated incoming and outgoing DMA usage variables. Returns a list of DMA-related variables (empty list in the base class).
 
-The no-op design means a subclass only needs to override the constraint methods relevant to its hardware. Methods left unoverridden remain silent — no constraints are added for that resource category on cores belonging to that namespace.
+The no-op design means a subclass only needs to override the constraint methods relevant to its hardware. Methods left unoverridden remain silent - no constraints are added for that resource category on cores belonging to that namespace.
 
 ---
 
@@ -32,10 +32,10 @@ The no-op design means a subclass only needs to override the constraint methods 
 
 The constructor accepts three DMA channel limit parameters and an off-chip core ID:
 
-- `max_compute_tile_dma_channels` (default: 8) — DMA channel limit for compute tiles
-- `max_mem_tile_dma_channels` (default: 6) — DMA channel limit for memory tiles
-- `max_shim_tile_dma_channels` (default: 2) — DMA channel limit for shim tiles
-- `offchip_core_id` — the ID of the off-chip (DRAM) core; used to identify shim tiles
+- `max_compute_tile_dma_channels` (default: 8) - DMA channel limit for compute tiles
+- `max_mem_tile_dma_channels` (default: 6) - DMA channel limit for memory tiles
+- `max_shim_tile_dma_channels` (default: 2) - DMA channel limit for shim tiles
+- `offchip_core_id` - the ID of the off-chip (DRAM) core; used to identify shim tiles
 
 These parameters come from `TransferMilpConfig` in `config.py` and are passed through `build_transfer_context()`.
 
@@ -59,7 +59,7 @@ DMA channel limits vary by tile type on the AIE2 array. Constraints apply indepe
 
 The `get_max_dma_channels(core)` method selects the correct limit by checking `core.id` against `offchip_core_id` first (shim tile identification), then falling back to `core.type` for compute versus memory tiles.
 
-`add_dma_usage_constraints` iterates over all DMA-participating cores, adds an upper-bound constraint for each core in both the incoming (`dma_usage_in`) and outgoing (`dma_usage_out`) directions, and returns any objective-penalty variables. The current implementation returns an empty list and does not add objective terms from `AIE2Constraints` — the DMA objective terms (`maxCoreDmaIn`, `maxCoreDmaOut`) are added by `TransferAndTensorAllocator._set_total_latency_and_objective` directly.
+`add_dma_usage_constraints` iterates over all DMA-participating cores, adds an upper-bound constraint for each core in both the incoming (`dma_usage_in`) and outgoing (`dma_usage_out`) directions, and returns any objective-penalty variables. The current implementation returns an empty list and does not add objective terms from `AIE2Constraints` - the DMA objective terms (`maxCoreDmaIn`, `maxCoreDmaOut`) are added by `TransferAndTensorAllocator._set_total_latency_and_objective` directly.
 
 ---
 
@@ -67,17 +67,17 @@ The `get_max_dma_channels(core)` method selects the correct limit by checking `c
 
 `TransferAndTensorContext` is a frozen dataclass that serves as the shared context for the transfer and tensor allocation MILP. Its key field is:
 
-- `namespace_constraints: tuple[NamespaceConstraints, ...]` — a tuple of namespace strategy instances, one per detected hardware namespace
+- `namespace_constraints: tuple[NamespaceConstraints, ...]` - a tuple of namespace strategy instances, one per detected hardware namespace
 
 Other fields include `offchip_core_id`, `mem_cores`, `force_double_buffering`, and `force_io_transfers_on_mem_tile`, which carry topology information used directly by `TransferAndTensorAllocator`.
 
 Three dispatch methods iterate over `namespace_constraints` and call the corresponding method on each strategy:
 
-- `add_object_fifo_constraints(model, object_fifo_depth)` — calls each strategy's `add_object_fifo_constraints` method
-- `add_buffer_descriptor_constraints(model, buffer_descriptor_depth)` — calls each strategy's `add_buffer_descriptor_constraints` method
-- `add_dma_usage_constraints(model, dma_usage_in, dma_usage_out)` — calls each strategy's `add_dma_usage_constraints` method
+- `add_object_fifo_constraints(model, object_fifo_depth)` - calls each strategy's `add_object_fifo_constraints` method
+- `add_buffer_descriptor_constraints(model, buffer_descriptor_depth)` - calls each strategy's `add_buffer_descriptor_constraints` method
+- `add_dma_usage_constraints(model, dma_usage_in, dma_usage_out)` - calls each strategy's `add_dma_usage_constraints` method
 
-`TransferAndTensorAllocator` calls these dispatch methods directly, not the individual namespace strategies. This means the allocator is fully agnostic to which hardware namespaces are present — it makes exactly three dispatch calls, and the context handles routing to the appropriate strategies.
+`TransferAndTensorAllocator` calls these dispatch methods directly, not the individual namespace strategies. This means the allocator is fully agnostic to which hardware namespaces are present - it makes exactly three dispatch calls, and the context handles routing to the appropriate strategies.
 
 ---
 
@@ -102,11 +102,11 @@ No changes to `TransferAndTensorAllocator` or `TransferAndTensorContext` are nee
 
 Constraint dispatch in `TransferAndTensorAllocator` operates through three levels of filtering:
 
-Level 1 — `ConstraintSelection` toggle (coarse): The allocator checks the boolean fields of its `ConstraintSelection` instance before doing anything else. If a field is `False`, the entire constraint group is skipped — no dispatch to `TransferAndTensorContext` occurs, and no namespace strategy is called. This is hardware-agnostic and lives at the API boundary.
+Level 1 - `ConstraintSelection` toggle (coarse): The allocator checks the boolean fields of its `ConstraintSelection` instance before doing anything else. If a field is `False`, the entire constraint group is skipped - no dispatch to `TransferAndTensorContext` occurs, and no namespace strategy is called. This is hardware-agnostic and lives at the API boundary.
 
-Level 2 — `TransferAndTensorContext` dispatch (namespace routing): If a constraint group is enabled, the allocator calls the corresponding dispatch method on its `TransferAndTensorContext`. The dispatch method iterates over every strategy in `namespace_constraints` and calls each one's constraint method.
+Level 2 - `TransferAndTensorContext` dispatch (namespace routing): If a constraint group is enabled, the allocator calls the corresponding dispatch method on its `TransferAndTensorContext`. The dispatch method iterates over every strategy in `namespace_constraints` and calls each one's constraint method.
 
-Level 3 — `applies_to()` core filtering (per-core): Inside each strategy's constraint method, `applies_to(core)` filters the core dictionaries to include only cores belonging to that namespace. Cores from other namespaces — or cores without a namespace — are silently skipped.
+Level 3 - `applies_to()` core filtering (per-core): Inside each strategy's constraint method, `applies_to(core)` filters the core dictionaries to include only cores belonging to that namespace. Cores from other namespaces - or cores without a namespace - are silently skipped.
 
 For reference, the constraint-selection guard applies to the following groups, which then flow through the remaining two levels when active:
 
@@ -125,6 +125,6 @@ See `.claude/skills/optimization/constraint-selection.md` for a full description
 
 ## See Also
 
-- `.claude/skills/optimization/constraint-selection.md` — `ConstraintSelection` dataclass, toggle-to-hardware mapping, and the coarse toggle layer that gates namespace dispatch
-- `.claude/skills/constraints/milp-formulation.md` — Full MILP structure for `TransferAndTensorAllocator`, including variable families and constraint groups
-- `.claude/skills/optimization/solver-backends.md` — The `SolverModel` interface used by constraint methods when adding constraints to the model
+- `.claude/skills/optimization/constraint-selection.md` - `ConstraintSelection` dataclass, toggle-to-hardware mapping, and the coarse toggle layer that gates namespace dispatch
+- `.claude/skills/constraints/milp-formulation.md` - Full MILP structure for `TransferAndTensorAllocator`, including variable families and constraint groups
+- `.claude/skills/optimization/solver-backends.md` - The `SolverModel` interface used by constraint methods when adding constraints to the model

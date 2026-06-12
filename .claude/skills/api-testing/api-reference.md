@@ -10,7 +10,7 @@ stream_aie exposes two programmatic entry points: `optimize_allocation_co()` run
 
 Runs the full CO pipeline for a single hardware/workload/mapping triple. The pipeline stages are: parse accelerator, parse ONNX workload, parse mapping, generate tiling, estimate core costs, run MILP allocation (TransferAndTensorAllocator), and estimate memory accesses. Optionally, an AIE code generation stage can be prepended.
 
-**AIE codegen prerequisite:** `enable_codegen=True` requires `pip install '.[aie]'` and `source setup_mlir_aie_pythonpath.sh` (Linux x86_64, Python 3.12/3.13).
+**AIE codegen prerequisite:** `enable_codegen=True` requires the optional AIE toolchain - run `stream-setup-aie` after installing stream-dse (Linux x86_64, Python 3.12/3.13).
 
 ### Parameters
 
@@ -180,12 +180,12 @@ Selects the MILP solver backend. Choices: `gurobi`, `ortools_gscip`, `ortools_hi
 
 ### --disable-constraints
 
-Selectively disables hardware resource constraint groups in the MILP allocation. Accepts zero or more values from: `memory_capacity`, `object_fifo_depth`, `buffer_descriptors`, `dma_channels`. When one or more groups are disabled, the script constructs a `ConstraintSelection` dataclass with the corresponding fields set to `False`. When the flag is not passed (or passed with no arguments), all four constraint groups remain enabled. Passing `--disable-constraints` with no values is equivalent to passing nothing — the empty set means all constraints remain active.
+Selectively disables hardware resource constraint groups in the MILP allocation. Accepts zero or more values from: `memory_capacity`, `object_fifo_depth`, `buffer_descriptors`, `dma_channels`. When one or more groups are disabled, the script constructs a `ConstraintSelection` dataclass with the corresponding fields set to `False`. When the flag is not passed (or passed with no arguments), all four constraint groups remain enabled. Passing `--disable-constraints` with no values is equivalent to passing nothing - the empty set means all constraints remain active.
 
 ---
 
 ## See Also
 
-- `.claude/skills/pipeline/pipeline-stages.md` — How API calls trigger and sequence the stage pipeline, stage-by-stage data flow
-- `.claude/skills/optimization/solver-backends.md` — `SolverBackend` enum values, `ORToolsBackend` and `GurobiBackend` details, linearization differences
-- `.claude/skills/optimization/constraint-selection.md` — `ConstraintSelection` dataclass fields, `--disable-constraints` toggle mapping, constraint group semantics
+- `.claude/skills/pipeline/pipeline-stages.md` - How API calls trigger and sequence the stage pipeline, stage-by-stage data flow
+- `.claude/skills/optimization/solver-backends.md` - `SolverBackend` enum values, `ORToolsBackend` and `GurobiBackend` details, linearization differences
+- `.claude/skills/optimization/constraint-selection.md` - `ConstraintSelection` dataclass fields, `--disable-constraints` toggle mapping, constraint group semantics
