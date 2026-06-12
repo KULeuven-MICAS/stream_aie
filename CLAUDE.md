@@ -10,36 +10,36 @@ For deep dives on specific subsystems, see `.claude/skills/`. Each group has a `
 
 ```
 stream_aie/
-├── scripts/                            # CLI entry points (main_*.py) and analysis/ (plot_*, postprocess_*)
-├── stream/
-│   ├── api.py                          # Public API
-│   ├── datatypes.py                    # LayerDim, InterCoreTiling type aliases
-│   ├── compiler/                       # MLIR code generation (dialects, kernels, transforms)
-│   ├── cost_model/                     # Scheduling, cost evaluation, communication
-│   ├── hardware/                       # Hardware architecture model
-│   ├── inputs/                         # Hardware YAML, mapping YAML, workload generators
-│   ├── ir/                             # Typed IR models (WorkloadIR, AllocationIR, AcceleratorIR)
-│   ├── mapping/                        # Mapping data model and DSE variant generation
-│   ├── mcp/                            # MCP server (stream-aie) exposing CO jobs to AI agents
-│   ├── opt/
-│   │   ├── allocation/
-│   │   │   └── constraint_optimization/   # MILP-based allocation
-│   │   │   │   ├── transfer_and_tensor_allocation.py  # TransferAndTensorAllocator
-│   │   │   │   ├── context.py                 # TransferAndTensorContext, NamespaceConstraints
-│   │   │   │   └── config.py                  # ConstraintOptStageConfig, CoreConstraintProfile
-│   │   └── solver/                        # Solver facade (SolverModel ABC, backends)
-│   ├── parser/                         # ONNX and workload parsing
-│   ├── stages/                         # Pipeline stage framework
-│   │   ├── stage.py                    # Stage, MainStage, LeafStage, StageCallable
-│   │   ├── context.py                  # StageContext (shared mutable state)
-│   │   ├── parsing/                    # Accelerator, mapping, ONNX parser stages
-│   │   ├── generation/                 # Tiling and mapping generation stages
-│   │   ├── estimation/                 # Core cost and memory estimation stages
-│   │   └── allocation/                 # CO allocation stages
-│   ├── visualization/                  # Plotting and trace export
-│   └── workload/                       # Workload DAG representation and steady-state model
-├── tests/                              # pytest test suite
-└── .claude/skills/                     # AI-agent skill groups (deep-dive docs)
+    scripts/                            # CLI entry points (main_*.py) and analysis/ (plot_*, postprocess_*)
+    stream/
+        api.py                          # Public API
+        datatypes.py                    # LayerDim, InterCoreTiling type aliases
+        compiler/                       # MLIR code generation (dialects, kernels, transforms)
+        cost_model/                     # Scheduling, cost evaluation, communication
+        hardware/                       # Hardware architecture model
+        inputs/                         # Hardware YAML, mapping YAML, workload generators
+        ir/                             # Typed IR models (WorkloadIR, AllocationIR, AcceleratorIR)
+        mapping/                        # Mapping data model and DSE variant generation
+        mcp/                            # MCP server (stream-aie) exposing CO jobs to AI agents
+        opt/
+            allocation/
+                constraint_optimization/   # MILP-based allocation
+                    transfer_and_tensor_allocation.py  # TransferAndTensorAllocator
+                    context.py                 # TransferAndTensorContext, NamespaceConstraints
+                    config.py                  # ConstraintOptStageConfig, CoreConstraintProfile
+            solver/                        # Solver facade (SolverModel ABC, backends)
+        parser/                         # ONNX and workload parsing
+        stages/                         # Pipeline stage framework
+            stage.py                    # Stage, MainStage, LeafStage, StageCallable
+            context.py                  # StageContext (shared mutable state)
+            parsing/                    # Accelerator, mapping, ONNX parser stages
+            generation/                 # Tiling and mapping generation stages
+            estimation/                 # Core cost and memory estimation stages
+            allocation/                 # CO allocation stages
+        visualization/                  # Plotting and trace export
+        workload/                       # Workload DAG representation and steady-state model
+    tests/                              # pytest test suite
+    .claude/skills/                     # AI-agent skill groups (deep-dive docs)
 ```
 
 ## Key Entry Points

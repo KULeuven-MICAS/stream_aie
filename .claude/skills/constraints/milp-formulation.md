@@ -2,13 +2,13 @@
 
 ## Overview
 
-The TETRA constraint optimization centers on a single MILP (Mixed-Integer Linear Programming) model, `TransferAndTensorAllocator`, which decides where tensors are stored and how data transfers are routed across the communication network. Computation nodes are placed on cores *before* the MILP runs — driven by the mapping rather than by an optimization model (see Node-to-Core Placement below). The MILP is built through the solver facade (`SolverModel` ABC) and solved using either Gurobi or OR-Tools backends. Its build pipeline follows the pattern: prepare data, create variables, add constraints, set objective, solve. Source file: `stream/opt/allocation/constraint_optimization/transfer_and_tensor_allocation.py` (TransferAndTensorAllocator, 2155 lines).
+The TETRA constraint optimization centers on a single MILP (Mixed-Integer Linear Programming) model, `TransferAndTensorAllocator`, which decides where tensors are stored and how data transfers are routed across the communication network. Computation nodes are placed on cores *before* the MILP runs - driven by the mapping rather than by an optimization model (see Node-to-Core Placement below). The MILP is built through the solver facade (`SolverModel` ABC) and solved using either Gurobi or OR-Tools backends. Its build pipeline follows the pattern: prepare data, create variables, add constraints, set objective, solve. Source file: `stream/opt/allocation/constraint_optimization/transfer_and_tensor_allocation.py` (TransferAndTensorAllocator, 2155 lines).
 
 ---
 
 ## Node-to-Core Placement
 
-Computation nodes are assigned to cores *before* the MILP runs, driven by the mapping rather than by an optimization model. The mapping supplies a `core_allocation` list per node — either hand-written in the mapping YAML or produced by `GenericMappingGenerator._select_cores_for_node()` (in `stream/mapping/generic_generator.py`). `get_partitioned_nodes()` (in `stream/opt/allocation/constraint_optimization/utils.py`) then partitions each node across exactly those cores according to its inter-core tiling, calling `set_chosen_core_allocation()` on each partition. Time slots are assigned by `Workload.get_timeslots(mapping)` — resource-aware: two same-class nodes may share a slot only when a disjoint core/link assignment exists for them.
+Computation nodes are assigned to cores *before* the MILP runs, driven by the mapping rather than by an optimization model. The mapping supplies a `core_allocation` list per node - either hand-written in the mapping YAML or produced by `GenericMappingGenerator._select_cores_for_node()` (in `stream/mapping/generic_generator.py`). `get_partitioned_nodes()` (in `stream/opt/allocation/constraint_optimization/utils.py`) then partitions each node across exactly those cores according to its inter-core tiling, calling `set_chosen_core_allocation()` on each partition. Time slots are assigned by `Workload.get_timeslots(mapping)` - resource-aware: two same-class nodes may share a slot only when a disjoint core/link assignment exists for them.
 
 `SteadyStateScheduler` (in `stream/cost_model/steady_state_scheduler.py`) orchestrates this: it builds the transfer graph from the placed nodes, computes the time slots, and then constructs and solves the `TransferAndTensorAllocator` MILP with those node-to-core placements fixed.
 
@@ -22,7 +22,7 @@ The MILP minimizes total execution latency, accounting for pipelining overlap: w
 
 The build pipeline is:
 
-    _create_vars()  →  _index_choice_metadata()  →  _create_constraints()  →  _overlap_and_objective()
+    _create_vars()  ->  _index_choice_metadata()  ->  _create_constraints()  ->  _overlap_and_objective()
 
 Variable creation uses double-underscore private helpers (`__create_tensor_placement_vars`, `__create_transfer_path_vars`, `__create_reuse_vars`, `__create_slot_latency_vars`). Choice metadata indexing precomputes per-choice link sets, source/destination core sets, and empty-path flags. Constraint groups are each a separate single-underscore method. The overlap and objective phase computes idle periods, DMA accounting, and sets the final objective.
 
@@ -53,8 +53,8 @@ Additional variables are created during the overlap and objective computation: `
 
 These constraints are unconditionally part of the model and are never guarded by `ConstraintSelection`:
 
-- `_tensor_placement_constraints`: Each tensor with more than one possible placement selects exactly one choice — the `x_` variables for each tensor form a one-hot vector.
-- `_path_choice_constraints`: Each transfer selects exactly one routing path — the `y_` variables for each transfer form a one-hot vector. Additional sub-constraints enforce source-tensor coherence (if a path routes from core A, the source tensor must be placed on core A) and destination-tensor coherence. Empty-path choices (zero-link paths) require source and destination tensors to be co-located on a common core.
+- `_tensor_placement_constraints`: Each tensor with more than one possible placement selects exactly one choice - the `x_` variables for each tensor form a one-hot vector.
+- `_path_choice_constraints`: Each transfer selects exactly one routing path - the `y_` variables for each transfer form a one-hot vector. Additional sub-constraints enforce source-tensor coherence (if a path routes from core A, the source tensor must be placed on core A) and destination-tensor coherence. Empty-path choices (zero-link paths) require source and destination tensors to be co-located on a common core.
 - `_transfer_fire_rate_constraints`: Defines `fires_[tr]` as the fire count implied by the selected reuse stop level. The fire count determines how many times a transfer executes per iteration; it decreases as the reuse level increases.
 - `_reuse_factor_rate_constraints`: Defines `reuse_factor_[tr]` as the reuse multiplier implied by the selected reuse stop level. A higher reuse factor means the same data is reused more times, reducing transfer frequency.
 - `_link_contention_constraints`: Each communication link can carry at most one active transfer per time slot. Transfers assigned to the same slot that share a link are mutually exclusive.
@@ -79,7 +79,7 @@ The following methods are conditionally called based on the `ConstraintSelection
 
 The DMA constraints live in `_overlap_and_objective()` rather than `_create_constraints()` because DMA accounting depends on the idle indicator variables and overlap-phase variables created during that phase. When `dma_channels` is disabled, the objective function simplifies from `minimize total_lat + maxCoreDmaIn + maxCoreDmaOut` to just `minimize total_lat`.
 
-The guarded constraint methods — `_memory_capacity_constraints`, `_object_fifo_depth_constraints`, and `_buffer_descriptor_constraints` — all use `_add_binary_product` to linearize the conjunction of tensor placement and reuse stop level selections. They then call the corresponding dispatch method on `TransferAndTensorContext`, which routes to the appropriate `NamespaceConstraints` strategy.
+The guarded constraint methods - `_memory_capacity_constraints`, `_object_fifo_depth_constraints`, and `_buffer_descriptor_constraints` - all use `_add_binary_product` to linearize the conjunction of tensor placement and reuse stop level selections. They then call the corresponding dispatch method on `TransferAndTensorContext`, which routes to the appropriate `NamespaceConstraints` strategy.
 
 ---
 
@@ -87,7 +87,7 @@ The guarded constraint methods — `_memory_capacity_constraints`, `_object_fifo
 
 `_overlap_and_objective()` computes the pipelining overlap and constructs the final objective.
 
-The method tracks idle periods on each resource — both communication links and compute cores. For each resource, prefix and suffix accumulators track cumulative activity from the start and end of the schedule, respectively. Binary idle indicators `idleS[res, s]` and `idleE[res, s]` are 1 when the resource has not yet been active by slot `s` (prefix idle) or has finished all activity before slot `s` (suffix idle).
+The method tracks idle periods on each resource - both communication links and compute cores. For each resource, prefix and suffix accumulators track cumulative activity from the start and end of the schedule, respectively. Binary idle indicators `idleS[res, s]` and `idleE[res, s]` are 1 when the resource has not yet been active by slot `s` (prefix idle) or has finished all activity before slot `s` (suffix idle).
 
 Idle latency per resource is the sum of slot latencies during idle periods. Because this requires multiplying binary idle indicators by the (continuous) slot latency variables, the computation uses `_add_binary_scaled_continuous` to produce an exact linear formulation. The per-resource idle latency is then stored in `idle_lat[res]`.
 
@@ -117,7 +117,7 @@ The DMA terms in the objective act as a soft pressure: even though the hard DMA 
 
 `TransferAndTensorAllocator` uses standard MILP linearization techniques. The following helper methods encapsulate the most common patterns:
 
-`_add_binary_product(a, b, base_name)` linearizes the AND of two binary variables. It introduces an auxiliary binary variable `w` with three constraints: `w <= a`, `w <= b`, `w >= a + b - 1`. This is the standard LP relaxation of a binary product. It is used heavily in memory capacity and buffer descriptor constraints, where two binary conditions — tensor placement choice and reuse stop level — must both hold simultaneously.
+`_add_binary_product(a, b, base_name)` linearizes the AND of two binary variables. It introduces an auxiliary binary variable `w` with three constraints: `w <= a`, `w <= b`, `w >= a + b - 1`. This is the standard LP relaxation of a binary product. It is used heavily in memory capacity and buffer descriptor constraints, where two binary conditions - tensor placement choice and reuse stop level - must both hold simultaneously.
 
 `_add_binary_scaled_continuous(binary_var, continuous_var, continuous_ub, base_name)` linearizes the product of a binary variable and a continuous variable using the McCormick envelope. The result `z` satisfies four constraints that collectively force `z = binary_var * continuous_var` when both variables are in their valid ranges. This helper is used throughout the idle latency computation, where each slot latency (continuous) is scaled by an idle indicator (binary).
 
@@ -127,6 +127,6 @@ The DMA terms in the objective act as a soft pressure: even though the hard DMA 
 
 ## See Also
 
-- `.claude/skills/optimization/constraint-selection.md` — The `ConstraintSelection` dataclass, toggle-to-hardware mapping, and the two-layer interaction between coarse toggles and namespace dispatch
-- `.claude/skills/constraints/namespace-constraints.md` — `NamespaceConstraints` base class, `AIE2Constraints`, `TransferAndTensorContext` dispatch, and hardware-specific constraint details
-- `.claude/skills/optimization/solver-backends.md` — The `SolverModel` ABC, `GurobiBackend`, `ORToolsBackend`, and the `supports_nonlinear` dispatch used by linearization helpers
+- `.claude/skills/optimization/constraint-selection.md` - The `ConstraintSelection` dataclass, toggle-to-hardware mapping, and the two-layer interaction between coarse toggles and namespace dispatch
+- `.claude/skills/constraints/namespace-constraints.md` - `NamespaceConstraints` base class, `AIE2Constraints`, `TransferAndTensorContext` dispatch, and hardware-specific constraint details
+- `.claude/skills/optimization/solver-backends.md` - The `SolverModel` ABC, `GurobiBackend`, `ORToolsBackend`, and the `supports_nonlinear` dispatch used by linearization helpers

@@ -2,9 +2,9 @@
 
 ## Overview
 
-The solver abstraction layer lives in `stream/opt/solver/solver.py` (single-module layout). `SolverModel` is an abstract base class (ABC) that defines the interface for all MILP operations — variable creation, constraint addition, objective setting, and solving. `GurobiBackend` and `ORToolsBackend` are the two concrete implementations. The factory function `create_solver()` instantiates the correct backend from a `SolverBackend` enum value, hiding all backend-specific construction from callers.
+The solver abstraction layer lives in `stream/opt/solver/solver.py` (single-module layout). `SolverModel` is an abstract base class (ABC) that defines the interface for all MILP operations - variable creation, constraint addition, objective setting, and solving. `GurobiBackend` and `ORToolsBackend` are the two concrete implementations. The factory function `create_solver()` instantiates the correct backend from a `SolverBackend` enum value, hiding all backend-specific construction from callers.
 
-All TETRA constraint optimization code (allocation.py, transfer_and_tensor_allocation.py, context.py, api.py) works exclusively through the `SolverModel` interface — no direct gurobipy imports appear outside the backend class itself.
+All TETRA constraint optimization code (allocation.py, transfer_and_tensor_allocation.py, context.py, api.py) works exclusively through the `SolverModel` interface - no direct gurobipy imports appear outside the backend class itself.
 
 **gurobipy is an optional dependency.** It is not a base requirement (OR-Tools GSCIP is the default, license-free backend); install it with the `[gurobi]` extra (`pip install -e ".[gurobi]"`). `solver.py` and `transfer_and_tensor_allocation.py` import gurobipy under a guarded `try/except ModuleNotFoundError`, so the package imports cleanly without it. Constructing a `GurobiBackend` (directly or via `create_solver(SolverBackend.GUROBI, ...)`) without gurobipy installed raises a clear `ImportError`.
 
@@ -25,7 +25,7 @@ The `SolverBackend` enum lists every supported backend configuration. Pass one o
 
 ## SolverModel ABC
 
-`SolverModel` defines the complete public interface for all solver interactions. Backends inherit from this class and must implement every abstract method. Two non-abstract methods — `supports_nonlinear` and `add_genconstr_nl` — have default implementations that signal non-support.
+`SolverModel` defines the complete public interface for all solver interactions. Backends inherit from this class and must implement every abstract method. Two non-abstract methods - `supports_nonlinear` and `add_genconstr_nl` - have default implementations that signal non-support.
 
 ### Class Constants
 
@@ -50,7 +50,7 @@ The `infinity()` instance method is a convenience accessor for the `INFINITY` cl
 | `get_sol_count()` | Return the number of solutions found | Returns `0` if no solve has been run |
 | `solve_stats()` | Return a `SolveStats` instance | Must be called after `optimize()`; unavailable fields are `None` |
 | `compute_iis()` | Compute an Irreducible Infeasible Subsystem | Only meaningful on infeasible models; behavior differs by backend |
-| `write(path)` | Write the model to a file | Supports `.lp`, `.mps`, `.ilp` — behavior differs by backend |
+| `write(path)` | Write the model to a file | Supports `.lp`, `.mps`, `.ilp` - behavior differs by backend |
 | `quicksum(iterable)` | Efficient sum over an iterable of backend expressions | Delegates to the backend's native sum implementation |
 | `lin_expr(constant)` | Create a zero or constant-valued linear expression | Usable as a `defaultdict(model.lin_expr)` value factory |
 
@@ -70,8 +70,8 @@ The `infinity()` instance method is a convenience accessor for the `INFINITY` cl
 
 `SolverVar` is an abstract wrapper around a backend decision variable. It exposes two key properties:
 
-- `.X` — the solution value after `optimize()` has been called. Raises `ValueError` if accessed before a feasible solution exists.
-- `._raw` — the underlying backend variable object (e.g. `gp.Var` for Gurobi, `mathopt.Variable` for OR-Tools). Use `._raw` when building backend-specific constraint expressions.
+- `.X` - the solution value after `optimize()` has been called. Raises `ValueError` if accessed before a feasible solution exists.
+- `._raw` - the underlying backend variable object (e.g. `gp.Var` for Gurobi, `mathopt.Variable` for OR-Tools). Use `._raw` when building backend-specific constraint expressions.
 
 `SolverVar` also delegates all arithmetic operators (`+`, `-`, `*`, `/`, `<=`, `>=`, `==`, unary `-`) to its underlying backend variable. This means `SolverVar` objects can be used directly in expressions without unwrapping, while still producing valid backend constraint expressions.
 
@@ -81,7 +81,7 @@ The `infinity()` instance method is a convenience accessor for the `INFINITY` cl
 
 `LinExpr` exposes a `._raw` property for the underlying backend expression, and delegates arithmetic operators (`+`, `-`, `*`, `<=`, `>=`, `==`) to the backend. The `model.lin_expr()` factory creates a zero-valued expression ready for accumulation.
 
-Both `SolverVar` and `LinExpr` have private backend implementations (`_GurobiVar`, `_GurobiLinExpr`, `_ORToolsVar`, `_ORToolsLinExpr`) that should never be constructed directly — always go through `SolverModel.add_var()` and `SolverModel.lin_expr()`.
+Both `SolverVar` and `LinExpr` have private backend implementations (`_GurobiVar`, `_GurobiLinExpr`, `_ORToolsVar`, `_ORToolsLinExpr`) that should never be constructed directly - always go through `SolverModel.add_var()` and `SolverModel.lin_expr()`.
 
 ---
 
