@@ -6,6 +6,8 @@ The solver abstraction layer lives in `stream/opt/solver/solver.py` (single-modu
 
 All TETRA constraint optimization code (allocation.py, transfer_and_tensor_allocation.py, context.py, api.py) works exclusively through the `SolverModel` interface — no direct gurobipy imports appear outside the backend class itself.
 
+**gurobipy is an optional dependency.** It is not a base requirement (OR-Tools GSCIP is the default, license-free backend); install it with the `[gurobi]` extra (`pip install -e ".[gurobi]"`). `solver.py` and `transfer_and_tensor_allocation.py` import gurobipy under a guarded `try/except ModuleNotFoundError`, so the package imports cleanly without it. Constructing a `GurobiBackend` (directly or via `create_solver(SolverBackend.GUROBI, ...)`) without gurobipy installed raises a clear `ImportError`.
+
 ---
 
 ## SolverBackend Enum
