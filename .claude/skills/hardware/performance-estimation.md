@@ -64,7 +64,7 @@ The AIE estimator does **not** use ZigZag. It requires the mapping to carry a `k
 
 Estimation logic:
 1. **Build a `ZigZagLayerNode` at per-core tile size.** Convert the `ComputationNode`'s dimension/affine mapping into ZigZag's layer-equation format, and shrink each inter-core-tiled dimension to the size a single core actually computes. `_inter_core_factors(node)` reads the total inter-core split factor per dimension from the mapping; `_per_core_size(full, factor)` divides the full dimension size by that factor when it divides evenly (otherwise leaves it unchanged - never a 0 or partial extent). This per-core shrink is applied consistently to **both** the ZigZag `layer_dim_sizes` (`create_layer_dim_sizes`) and the PR/affine tensor extents (`create_equation_and_dimension_relations_and_padding_and_pr_sizes`), so ZigZag costs the per-core tile of a layer-fused mapping, not the full layer. (The AIE estimator does the analogous thing by dividing MACs by the inter-core tiling factor.)
-2. Instantiate a ZigZag `MainStage` pipeline: `MinimalLatencyStage -> SpatialMappingGeneratorStage -> MinimalLatencyStage -> TemporalMappingGeneratorStage -> CostModelStage` (the two `MinimalLatencyStage`s reduce, respectively, the final CMEs and the generated spatial mappings to the minimal-latency choice).
+2. Instantiate a ZigZag `MainStage` pipeline: `MinimalLatencyStage → SpatialMappingGeneratorStage → MinimalLatencyStage → TemporalMappingGeneratorStage → CostModelStage` (the two `MinimalLatencyStage`s reduce, respectively, the final CMEs and the generated spatial mappings to the minimal-latency choice).
 3. Pass `core.to_zigzag_core()` - the inner `ZigZagCoreBackend` - as the accelerator. This is why ZigZag-backed cores are required for this estimator path.
 4. Run the ZigZag pipeline; receive a `CostModelEvaluation`.
 5. Apply `increase_cc_per_op()` for special operations: silu, sigmoid, and exp cost 4 cycles per operation (default: 1 cycle per operation).
@@ -88,7 +88,7 @@ These `layer_dim_sizes` are the per-core tile sizes from step 1, so the fallback
 
 ## CoreCostLUT - Caching
 
-`CoreCostLUT` (`stream/cost_model/core_cost_lut.py`) is a two-level dict `{ComputationNode -> {Core -> CoreCostEntry}}`, persisted to `output_path/core_cost_lut.pickle` and loaded at the start of each run.
+`CoreCostLUT` (`stream/cost_model/core_cost_lut.py`) is a two-level dict `{ComputationNode → {Core → CoreCostEntry}}`, persisted to `output_path/core_cost_lut.pickle` and loaded at the start of each run.
 
 Cache lookups use **semantic equality**, not object identity:
 - Node lookup uses `node.has_same_performance(n)` - compares `layer_dim_sizes`, the operator equation, and other performance-determining fields.

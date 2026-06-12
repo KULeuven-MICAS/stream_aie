@@ -78,7 +78,7 @@ Concerned with *where the latency goes* - whether a schedule is compute-bound, t
   - `aggregate.latency_weighted_mac_spatial_utilization` (1.0 = full PE arrays) and `compute_cores_used` vs `compute_cores_available` - exposes idle compute capacity.
   - `nodes[name]` - per compute node: `n_cores` (inter-core spread), `latency_cycles`, `ideal_compute_cycles`, `mac_spatial_utilization`, and `compute_efficiency` (= ideal / actual).
 
-**How to diagnose with it:** low `mac_spatial_utilization` => the per-core spatial (PE-array) mapping is the bottleneck (intra-core under-utilization). Identical per-node `latency_cycles` across two hardware variants with different `n_cores` => inter-core tiling isn't reducing latency (compare two runs). High `transfer_bound_pct` => DMA/NoC bound. These are *observational* - they reveal cost-model behaviour; never change the cost model to "fix" a number without confirming the modelling intent.
+**How to diagnose with it:** low `mac_spatial_utilization` ⇒ the per-core spatial (PE-array) mapping is the bottleneck (intra-core under-utilization). Identical per-node `latency_cycles` across two hardware variants with different `n_cores` ⇒ inter-core tiling isn't reducing latency (compare two runs). High `transfer_bound_pct` ⇒ DMA/NoC bound. These are *observational* - they reveal cost-model behaviour; never change the cost model to "fix" a number without confirming the modelling intent.
 
 ## Anti-Patterns
 

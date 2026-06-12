@@ -22,7 +22,7 @@ The MILP minimizes total execution latency, accounting for pipelining overlap: w
 
 The build pipeline is:
 
-    _create_vars()  ->  _index_choice_metadata()  ->  _create_constraints()  ->  _overlap_and_objective()
+    _create_vars()  →  _index_choice_metadata()  →  _create_constraints()  →  _overlap_and_objective()
 
 Variable creation uses double-underscore private helpers (`__create_tensor_placement_vars`, `__create_transfer_path_vars`, `__create_reuse_vars`, `__create_slot_latency_vars`). Choice metadata indexing precomputes per-choice link sets, source/destination core sets, and empty-path flags. Constraint groups are each a separate single-underscore method. The overlap and objective phase computes idle periods, DMA accounting, and sets the final objective.
 

@@ -96,7 +96,7 @@ Key methods: `get_core(core_id)` returns a `Core` by integer ID; `core_list` ret
 
 ---
 
-## YAML -> Accelerator Parse Path
+## YAML → Accelerator Parse Path
 
 Parsing proceeds in this order:
 
@@ -105,9 +105,9 @@ Parsing proceeds in this order:
 2. `CoreValidatorRegistry` in `stream/parser/core_validator.py` selects the per-type cerberus validator (e.g. `AIE2ComputeCoreValidator`, `ZigZagComputeCoreValidator`) and validates the individual core YAML.
 
 3. `AcceleratorFactory.create()` in `stream/parser/accelerator_factory.py` iterates the validated data and calls `create_core()` per core. `create_core()` branches on `namespace`:
-   - `namespace == "aie2"` -> construct `AIE2CoreBackend`, create `Core`.
-   - `namespace == "zigzag"` -> run `ZigZagCoreFactory(core_data).create(core_id)`, upgrade class to `ZigZagCoreBackend`, create `Core`.
-   - Unknown namespace -> `ValueError`.
+   - `namespace == "aie2"` → construct `AIE2CoreBackend`, create `Core`.
+   - `namespace == "zigzag"` → run `ZigZagCoreFactory(core_data).create(core_id)`, upgrade class to `ZigZagCoreBackend`, create `Core`.
+   - Unknown namespace → `ValueError`.
 
 ---
 
@@ -116,8 +116,8 @@ Parsing proceeds in this order:
 `operator_types` is an **optional YAML field** on a core - it is not a new role or kind. It refines a `compute`-role core to restrict which operator types it handles. Both `zigzag.compute` and `aie2.compute` cores support it. `None` (the default) means the core accepts all operator types.
 
 The pooling and SIMD cores in the TPU-like example are both `zigzag.compute` - they differ only in `operator_types`:
-- `pooling.yaml` -> `operator_types: [MaxPool, AveragePool, GlobalAveragePool, GlobalMaxPool]`
-- `simd.yaml` -> `operator_types: [Add, Relu]`
+- `pooling.yaml` → `operator_types: [MaxPool, AveragePool, GlobalAveragePool, GlobalMaxPool]`
+- `simd.yaml` → `operator_types: [Add, Relu]`
 
 Core selection in `GenericMappingGenerator._select_cores_for_node()` (`stream/mapping/generic_generator.py`) follows a priority rule: (1) if any core's `operator_types` list contains `node.type`, use those specialized cores exclusively; (2) otherwise, use cores where `operator_types is None`; (3) final fallback: all `compute`-kind cores.
 
@@ -129,17 +129,17 @@ One subtlety: `operator_types` is read directly from the raw YAML dict by `Accel
 
 ### AIE Single Column (`stream/inputs/aie/hardware/single_col.yaml`)
 
-- Core 0: `shim_dma.yaml` -> `aie2.shim` - DMA interface tile; `offchip_core_id = 0` (the shim acts as the off-chip interface in the MILP).
-- Core 1: `mem_tile_256KB.yaml` -> `aie2.memory` - 256 KB on-chip cache tile.
-- Cores 2-5: `aie_tile.yaml` -> `aie2.compute` - 64 KB L1, 12 FIFO slots each.
-- Connectivity: linear `link` chain (shim -> mem -> compute tiles).
+- Core 0: `shim_dma.yaml` → `aie2.shim` - DMA interface tile; `offchip_core_id = 0` (the shim acts as the off-chip interface in the MILP).
+- Core 1: `mem_tile_256KB.yaml` → `aie2.memory` - 256 KB on-chip cache tile.
+- Cores 2-5: `aie_tile.yaml` → `aie2.compute` - 64 KB L1, 12 FIFO slots each.
+- Connectivity: linear `link` chain (shim → mem → compute tiles).
 
 ### TPU-Like Quad Core (`stream/inputs/examples/hardware/tpu_like_quad_core.yaml`)
 
-- Cores 0-3: `tpu_like.yaml` -> `zigzag.compute` - 2 MB SRAM, 32x32 PE array each.
-- Core 4: `pooling.yaml` -> `zigzag.compute` + `operator_types: [MaxPool, AveragePool, GlobalAveragePool, GlobalMaxPool]`.
-- Core 5: `simd.yaml` -> `zigzag.compute` + `operator_types: [Add, Relu]`.
-- Core 6: `offchip.yaml` -> `zigzag.offchip` - DRAM controller; `offchip_core_id = 6`.
+- Cores 0-3: `tpu_like.yaml` → `zigzag.compute` - 2 MB SRAM, 32×32 PE array each.
+- Core 4: `pooling.yaml` → `zigzag.compute` + `operator_types: [MaxPool, AveragePool, GlobalAveragePool, GlobalMaxPool]`.
+- Core 5: `simd.yaml` → `zigzag.compute` + `operator_types: [Add, Relu]`.
+- Core 6: `offchip.yaml` → `zigzag.offchip` - DRAM controller; `offchip_core_id = 6`.
 - Connectivity: 2-D mesh among compute cores (`link` entries) + shared `bus` to offchip.
 
 This TPU example demonstrates heterogeneous compute specialization **without** a distinct hardware architecture difference: pooling and SIMD are both ZigZag-backed `compute` cores, distinguished only by `operator_types`.
