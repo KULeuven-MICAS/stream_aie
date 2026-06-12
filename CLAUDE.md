@@ -64,7 +64,7 @@ Scripts import `stream` as an installed package (`pip install -e .`); run them f
 ## Coding Conventions
 
 - **Formatter:** ruff-format (pre-commit hook); line length 120
-- **Python target:** 3.11+; use `X | Y` union syntax, built-in generics (`list[X]`, `dict[K, V]`)
+- **Python target:** 3.12+; use `X | Y` union syntax, built-in generics (`list[X]`, `dict[K, V]`)
 - **Imports:** absolute only (`from stream.stages.stage import Stage`); isort order: stdlib -> third-party -> internal
 - **Files:** `snake_case.py`; **Classes:** `PascalCase`; Stage classes end with `Stage`
 - **Private methods:** `_single_underscore`; internal MILP helpers: `__double_underscore`
